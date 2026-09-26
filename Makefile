@@ -18,7 +18,7 @@ test-golden:
 	python -m pytest -m golden
 
 test-integration:
-	@echo "integration tests not yet implemented (Phase 5)"
+	python -m pytest -m integration
 
 migrate:
 	python manage.py migrate
