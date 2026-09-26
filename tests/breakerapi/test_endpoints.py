@@ -171,3 +171,153 @@ def test_unlock_spattack_appends_to_character():
     assert data[1][2] == 696969  # spirit
     char1 = next(c for c in data[1][1] if c[0] == 1)
     assert 9999999 in char1[1]
+
+
+# Phase 1: battle-lifecycle stub endpoints
+
+PRD_API = f"/dbtb-prd/{PFX}/{TITLE_PRD}/api"
+ROSTER = [f"10000000000000002{i}" for i in range(8)]  # leader first
+
+
+def test_waittime_preview_seven_int_queue_stats():
+    data, _ = post(Client(), f"{PRD_API}/battle/waittime_preview")
+    assert data[0]["result"] == 0
+    assert len(data[1]) == 7
+    assert all(isinstance(x, int) for x in data[1])
+    assert data[1][0] == 0
+
+
+def test_pre_matching_connection():
+    data, _ = post(Client(), f"{PRD_API}/battle/pre_matching_connection")
+    assert data[1] == [0, 0, 0]
+
+
+def test_save_matching_cache():
+    data, _ = post(Client(), f"{PRD_API}/battle/save_matching_cache")
+    assert data[1] == [0]
+
+
+def test_get_connection_server_info_fresh_random_keys():
+    client = Client()
+    seen = []
+    for _ in range(2):
+        data, _ = post(client, f"{PRD_API}/battle/get_connection_server_info")
+        assert data[1][0] == 0
+        host, port, sid, aes, iv, mac = data[1][1]
+        assert host == settings.UDP_HOST
+        assert port == settings.UDP_SESSION_PORT
+        assert all(len(k) == 32 for k in (sid, aes, iv, mac))
+        for k in (sid, aes, iv, mac):
+            bytes.fromhex(k)  # raises unless valid 16-byte hex
+        seen.append(data[1][1])
+    assert seen[0][2:] != seen[1][2:]  # fresh key set per call
+
+
+def test_upload_ghost_player():
+    data, _ = post(Client(), f"{PRD_API}/player/upload_ghost_player", [meta(), [ROSTER[1:]]])
+    assert data[1] == [0]
+
+
+def test_consume_priority_point():
+    data, _ = post(
+        Client(),
+        f"{PRD_API}/battle/consume_priority_point",
+        [meta(), ["100000000000000020_20000101120000"]],
+    )
+    assert data[1] == [0]
+
+
+def test_get_battle_member_result_list_empty_stub():
+    data, _ = post(
+        Client(),
+        f"{PRD_API}/battle/get_battle_member_result_list",
+        [meta(), ["100000000000000020_20000101120000"]],
+    )
+    assert data[1] == [0, []]
+
+
+def test_battle_id_endpoints_accept_bin_encoded_id():
+    # docs: battle ids are fixstr on the wire, but the stubs ignore the body —
+    # a bin8/bin16-encoded id must not break them either way
+    body = msgpack.packb([meta(), [b"100000000000000020_20000101120000"]])
+    for endpoint in ("consume_priority_point", "get_battle_member_result_list"):
+        resp = Client().post(
+            f"{PRD_API}/battle/{endpoint}",
+            data=body,
+            content_type="application/x-www-form-urlencoded",
+        )
+        assert resp.status_code == 200
+
+
+def test_battle_start_shape():
+    data, _ = post(Client(), f"{PRD_API}/battle/start", [meta(), [2, ROSTER]])
+    assert data[1][0] == 0
+    battle_id = data[1][1]
+    leader, _, timestamp = battle_id.partition("_")
+    assert leader == ROSTER[0]
+    assert len(timestamp) == 14 and timestamp.isdigit()
+    assert data[1][2] == ["", 0, 0, 0, 0]
+    assert data[1][3] == []
+
+
+def test_battle_result_rewards_tree_shape():
+    report = [
+        "100000000000000020_20000101120000",
+        0,
+        0,
+        2,
+        "tokenA-placeholder",
+        "tokenB-placeholder",
+        1,
+        [[pid, 0] for pid in ROSTER],
+        1,
+        ["", 0],
+        600,
+        "",
+    ]
+    data, _ = post(Client(), f"{PRD_API}/battle/result", [meta(), report])
+    tree = data[1]
+    assert len(tree) == 11
+    assert tree[0] == 0
+    assert isinstance(tree[9], float)
+    assert tree[4][0] == 9  # season pass block present
+    assert tree[5][:2] == [1, 1]  # challenge progress container
+
+
+@pytest.mark.django_db
+def test_matchmaking_call_order():
+    """Documented sequence (Matchmaking_Flow.md): queue join -> match found ->
+    post-match, echoing the rolling session token between calls."""
+    client = Client()
+    session = ""
+
+    def call(path, args=None):
+        nonlocal session
+        data, _ = post(
+            client, path, [dict(meta(), session=session), args if args is not None else []]
+        )
+        assert data[0]["result"] == 0
+        session = data[0]["session"]
+        return data[1]
+
+    call(f"/{PFX}/{TITLE_ENV}/api/user/auth", [100000000000000021])
+    # queue join (+ poll)
+    call(f"{PRD_API}/battle/waittime_preview")
+    call(f"{PRD_API}/battle/pre_matching_connection")
+    call(f"{PRD_API}/battle/save_matching_cache")
+    call(f"{PRD_API}/battle/waittime_preview")
+    # match found
+    call(f"{PRD_API}/battle/get_connection_server_info")
+    call(f"{PRD_API}/player/upload_ghost_player", [ROSTER[1:]])
+    battle_id = call(f"{PRD_API}/battle/start", [2, ROSTER])[1]
+    call(f"{PRD_API}/battle/consume_priority_point", [battle_id])
+    # post-match
+    call(
+        f"{PRD_API}/battle/result",
+        [[battle_id, 0, 0, 2, "a", "b", 1, [[pid, 0] for pid in ROSTER], 1, ["", 0], 600, ""]],
+    )
+    call(f"{PRD_API}/sys/kpi")
+    members = call(f"{PRD_API}/battle/get_battle_member_result_list", [battle_id])
+    assert members == [0, []]
+    # lobby refresh -> re-queue
+    call(f"{PRD_API}/battle/pre_matching_connection")

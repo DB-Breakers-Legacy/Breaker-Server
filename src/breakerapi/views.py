@@ -1,4 +1,5 @@
 import logging
+import os
 
 import msgpack
 from django.conf import settings
@@ -1340,3 +1341,115 @@ def unlockSpattack(request):
 @require_POST
 def skillTraining(request):
     return respond([0])
+
+
+# Battle lifecycle (queue join -> match found -> post-match)
+
+
+# 025348/api/battle/waittime_preview
+# Polled while queued. Seven ints: [0] result code, [1]/[2]/[3] queue wait
+# stats, [4]/[6] constant 0, [5] 1 on post-match re-queue. Values follow the
+# documented sample so the client's queue-entry display behaves.
+@ignore_kwargs
+@require_POST
+def waittimePreview(request):
+    return respond([0, 346, 135, 346, 0, 0, 0])
+
+
+# 025348/api/battle/pre_matching_connection
+@ignore_kwargs
+@require_POST
+def preMatchingConnection(request):
+    return respond([0, 0, 0])  # trailing ints always 0 in captures, meaning unknown
+
+
+# 025348/api/battle/save_matching_cache
+# Request carries nothing beyond the common fields; whatever is "saved" was
+# derived server-side from the session.
+@ignore_kwargs
+@require_POST
+def saveMatchingCache(request):
+    return respond([0])
+
+
+# ponytail: SID -> session key set registry is in-memory, single process.
+# Phase 2: the UDP session-host server consumes this to authenticate clients.
+_session_keys = {}
+
+
+# 025348/api/battle/get_connection_server_info
+# Session-host handout at match found: fresh random key set per call, same
+# [host, port, SID, AES, IV, HMAC] shape as get_diarkis_matching_server_info
+# but without its trailing [1, 1].
+@ignore_kwargs
+@require_POST
+def getConnectionServerInfo(request):
+    sid, aes, iv, mac = (os.urandom(16).hex() for _ in range(4))
+    _session_keys[sid] = (aes, iv, mac)
+    return respond([0, [settings.UDP_HOST, settings.UDP_SESSION_PORT, sid, aes, iv, mac]])
+
+
+# 025348/api/player/upload_ghost_player
+# "Played with" list (7 other match participants); accepted and ignored.
+@ignore_kwargs
+@require_POST
+def uploadGhostPlayer(request):
+    return respond([0])
+
+
+# 025348/api/battle/consume_priority_point
+# Request [0] is the battle id; accepted and ignored.
+# Response never captured on the wire — [0] is the Ghidra-derived shape.
+@ignore_kwargs
+@require_POST
+def consumePriorityPoint(request):
+    return respond([0])
+
+
+# 025348/api/battle/start
+# Called once per match by the session leader after the room fills.
+# TODO (low confidence): request [0] mode enum semantics; response [2]/[3]
+# contents when non-empty — the single captured sample had them empty.
+@ignore_kwargs
+@require_POST
+def battleStart(request):
+    unpacked = msgpack.unpackb(request.body, raw=False)
+    leader_id = unpacked[1][1][0]  # roster, own (leader) id first
+    battle_id = f"{leader_id}_{timezone.now().strftime('%Y%m%d%H%M%S')}"
+    return respond([0, battle_id, ["", 0, 0, 0, 0], []])
+
+
+# 025348/api/battle/result
+# Request is the 12-element match report; its two base64url tokens are opaque
+# client-computed blobs — accepted and ignored. Response is the minimal
+# structurally-complete rewards tree (per-field meanings unknown per the docs).
+@ignore_kwargs
+@require_POST
+def battleResult(request):
+    # season pass block: same shape as patroller/get_status, emptied
+    pass_block = [9, "2025-07-30 02:00:00", "2050-12-31 14:59:59", 9, 0, [], 35, [], ["", ""]]
+    return respond(
+        [
+            0,
+            [0, 0, 0, 0, 0],
+            [0, 0, 0, 0, 0, 0],
+            [0, 0, 0, 0],
+            pass_block,
+            [1, 1, [], []],
+            [],
+            [0, 0, 0, 0, "2050-12-31 14:59:59"],
+            [],
+            1.0,
+            [0, 0],
+        ]
+    )
+
+
+# 025348/api/battle/get_battle_member_result_list
+# Request [0] is the battle id; accepted and ignored.
+@ignore_kwargs
+@require_POST
+def getBattleMemberResultList(request):
+    # stub returns the empty member list; full row shape:
+    # [playerId str, rankOrResult int, totalScore int, [[categoryKey, points] x 5]]
+    return respond([0, []])

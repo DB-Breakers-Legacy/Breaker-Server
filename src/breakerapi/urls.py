@@ -47,6 +47,21 @@ urlpatterns = [
     # training
     path("dbtb-prd/<pfx>/<id>/api/transball/unlock_spattack", views.unlockSpattack),
     path("dbtb-prd/<pfx>/<id>/api/skill/training", views.skillTraining),
+    # battle lifecycle (queue join -> match found -> post-match)
+    path("dbtb-prd/<pfx>/<id>/api/battle/waittime_preview", views.waittimePreview),
+    path("dbtb-prd/<pfx>/<id>/api/battle/pre_matching_connection", views.preMatchingConnection),
+    path("dbtb-prd/<pfx>/<id>/api/battle/save_matching_cache", views.saveMatchingCache),
+    path(
+        "dbtb-prd/<pfx>/<id>/api/battle/get_connection_server_info", views.getConnectionServerInfo
+    ),
+    path("dbtb-prd/<pfx>/<id>/api/battle/consume_priority_point", views.consumePriorityPoint),
+    path(
+        "dbtb-prd/<pfx>/<id>/api/battle/get_battle_member_result_list",
+        views.getBattleMemberResultList,
+    ),
+    path("dbtb-prd/<pfx>/<id>/api/battle/start", views.battleStart),
+    path("dbtb-prd/<pfx>/<id>/api/battle/result", views.battleResult),
+    path("dbtb-prd/<pfx>/<id>/api/player/upload_ghost_player", views.uploadGhostPlayer),
     # shop
     path("dbtb-prd/<pfx>/<id>/api/commonpurchase/tokusho/", views.tokusho),
 ]
