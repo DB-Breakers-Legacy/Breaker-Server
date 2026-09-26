@@ -70,6 +70,10 @@ PRD_HOST = os.environ.get("PRD_HOST", "127.0.0.1")
 UDP_HOST = os.environ.get("UDP_HOST", "127.0.0.1")
 UDP_PORT = int(os.environ.get("UDP_PORT", "7100"))
 
+# Session host handed out by battle/get_connection_server_info once a match is
+# found (7100 and 7102 both observed on the official servers)
+UDP_SESSION_PORT = int(os.environ.get("UDP_SESSION_PORT", "7102"))
+
 # Local STUN server(s) handed out by battle/get_stun_server_info
 STUN_HOST = os.environ.get("STUN_HOST", "127.0.0.1")
 STUN_PORTS = [int(p) for p in os.environ.get("STUN_PORTS", "3478,3479").split(",") if p.strip()]
