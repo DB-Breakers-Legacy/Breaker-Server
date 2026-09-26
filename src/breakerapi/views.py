@@ -1,11 +1,12 @@
 import logging
-import os
 
 import msgpack
 from django.conf import settings
 from django.http import HttpResponse
 from django.utils import timezone
 from django.views.decorators.http import require_POST
+
+from diarkis_peer import issue_keyset
 
 from .helpers import (
     env_uri,
@@ -579,19 +580,19 @@ def getCharacterItems(request):
 @ignore_kwargs
 @require_POST
 def getMatchingServer(request):
+    # fresh per-session key set, registered for the UDP peer (diarkis_peer).
+    # Wire order: [host, port, SID, AES key, IV, HMAC key] as hex.
+    ks = issue_keyset()
     return respond(
         [
             0,
-            # ip addr and port for UDP server
             [
                 settings.UDP_HOST,
                 settings.UDP_PORT,
-                # IV, AES, SID, HMAC keys (hex) — env-configured, shared with
-                # RUDPserver.py. Phase 2: per-session random keys generated here.
-                settings.DIARKIS_IV_KEY.hex(),
-                settings.DIARKIS_AES_KEY.hex(),
-                settings.DIARKIS_SID_KEY.hex(),
-                settings.DIARKIS_HASH_KEY.hex(),
+                ks.sid.hex(),
+                ks.key.hex(),
+                ks.iv.hex(),
+                ks.mac.hex(),
             ],
             [1, 1],
         ]
@@ -1372,11 +1373,6 @@ def saveMatchingCache(request):
     return respond([0])
 
 
-# ponytail: SID -> session key set registry is in-memory, single process.
-# Phase 2: the UDP session-host server consumes this to authenticate clients.
-_session_keys = {}
-
-
 # 025348/api/battle/get_connection_server_info
 # Session-host handout at match found: fresh random key set per call, same
 # [host, port, SID, AES, IV, HMAC] shape as get_diarkis_matching_server_info
@@ -1384,9 +1380,20 @@ _session_keys = {}
 @ignore_kwargs
 @require_POST
 def getConnectionServerInfo(request):
-    sid, aes, iv, mac = (os.urandom(16).hex() for _ in range(4))
-    _session_keys[sid] = (aes, iv, mac)
-    return respond([0, [settings.UDP_HOST, settings.UDP_SESSION_PORT, sid, aes, iv, mac]])
+    ks = issue_keyset()
+    return respond(
+        [
+            0,
+            [
+                settings.UDP_HOST,
+                settings.UDP_SESSION_PORT,
+                ks.sid.hex(),
+                ks.key.hex(),
+                ks.iv.hex(),
+                ks.mac.hex(),
+            ],
+        ]
+    )
 
 
 # 025348/api/player/upload_ghost_player

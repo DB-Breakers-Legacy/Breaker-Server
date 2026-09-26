@@ -8,7 +8,6 @@ Nothing secret or site-specific is committed.
 import os
 from pathlib import Path
 
-from django.core.exceptions import ImproperlyConfigured
 from django.core.management.utils import get_random_secret_key
 from dotenv import load_dotenv
 
@@ -82,20 +81,8 @@ STUN_PORTS = [int(p) for p in os.environ.get("STUN_PORTS", "3478,3479").split(",
 # your own export. Empty/missing path -> empty blob.
 ADJUSTMENT_DATA_PATH = os.environ.get("ADJUSTMENT_DATA_PATH", "")
 
-
-def _key16(name):
-    # all-zero placeholder matches .env.example; set real random keys per deployment
-    raw = os.environ.get(name, "00" * 16)
-    key = bytes.fromhex(raw)
-    if len(key) != 16:
-        raise ImproperlyConfigured(f"{name} must be 16 bytes (32 hex chars)")
-    return key
-
-
-# Diarkis session key set shared with RUDPserver.py.
-# Phase 2: replace with per-session random keys generated here and shared with
-# the UDP server.
-DIARKIS_SID_KEY = _key16("DIARKIS_SID_KEY")
-DIARKIS_AES_KEY = _key16("DIARKIS_AES_KEY")
-DIARKIS_IV_KEY = _key16("DIARKIS_IV_KEY")
-DIARKIS_HASH_KEY = _key16("DIARKIS_HASH_KEY")
+# Diarkis session keys are fresh per session, issued by the HTTP handout
+# endpoints and shared with the UDP peer via diarkis_peer.KEY_REGISTRY
+# (single process — see the rundiarkis management command). Dev override:
+# DIARKIS_SID_KEY/DIARKIS_AES_KEY/DIARKIS_IV_KEY/DIARKIS_HASH_KEY env vars pin
+# a fixed key set (see .env.example; consumed by diarkis_peer.issue_keyset).
