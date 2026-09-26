@@ -22,9 +22,15 @@ implemented yet** (Phase 0).
    wire codec: datagram header, `FE BE DE EF` command envelope, secure envelope
    (AES-128-CBC + HMAC-SHA256), `FF FE FD FC` fragmentation. Built from the
    capture-verified decoder logic.
-3. **`RUDPserver.py`** (repo root) — Twisted UDP matchmaking handshake on port
-   7100. **Phase 2 replaces this** (per-session keys, per-client state, codec
-   move to `diarkis/`). Keys come from the environment, not source.
+3. **Diarkis UDP peer** (`src/diarkis_peer.py`, entry point `RUDPserver.py`) —
+   Twisted session transport + bootstrap on UDP 7100 (matchmaking) and 7102
+   (session-host redirect probe). Per-session state keyed by SID; per-session
+   random keys are issued by the HTTP handout endpoints and shared via the
+   in-process `KEY_REGISTRY`. **HTTP and UDP must run in one process** for the
+   registry to be shared: use `python manage.py rundiarkis`
+   (`RUDPserver.py` standalone is a dev entry point that only knows the
+   env-pinned key set, if any). Payload strings (0x012f pushes, redirect,
+   directory answer) are `.env`-configured.
 4. **STUN** (`stun/`) — external prerequisite (`stund`/STUNTMAN), config
    template + docs only, no binaries. Ports 3478/3479.
 
@@ -57,7 +63,9 @@ you don't have `make`, run the commands from the `Makefile` directly.
 - **Hypercorn `#BREADED` patch** (reference server patched
   `hypercorn/protocol/h2.py` to fix DATA_END on the last data packet) is not
   carried over — fragile across upgrades. HTTP/2 deployments may need an
-  equivalent fix; run plain `runserver` for development.
+  equivalent fix; run plain `runserver` for development. `manage.py rundiarkis`
+  serves HTTP/1.1 via wsgiref (dev only) — the real client needs HTTP/2, so a
+  production one-process deployment must swap in hypercorn.
 - **channels/Redis** config from the reference server was dropped: websocket
   routes were commented out and unreachable (ASGI pointed at the plain Django
   application). Revisit if websockets ever become needed.

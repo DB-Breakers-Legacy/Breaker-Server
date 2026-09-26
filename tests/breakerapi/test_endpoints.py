@@ -88,18 +88,38 @@ def test_get_stun_server_info_returns_local_env_server():
     assert data[1] == [0, [[settings.STUN_HOST, 3478], [settings.STUN_HOST, 3479]]]
 
 
-def test_get_matching_server_info_uses_env_keys():
-    data, _ = post(
-        Client(), f"/dbtb-prd/{PFX}/{TITLE_PRD}/api/battle/get_diarkis_matching_server_info"
-    )
-    assert data[0]["result"] == 0
-    host, port, iv, aes, sid, mac = data[1][1]
-    assert host == settings.UDP_HOST
-    assert port == settings.UDP_PORT
-    assert iv == settings.DIARKIS_IV_KEY.hex()
-    assert aes == settings.DIARKIS_AES_KEY.hex()
-    assert sid == settings.DIARKIS_SID_KEY.hex()
-    assert mac == settings.DIARKIS_HASH_KEY.hex()
+def test_get_matching_server_info_fresh_keys_registered():
+    """Phase 2 T3: fresh per-session random key set, registered for the UDP peer."""
+    from diarkis_peer import KEY_REGISTRY
+
+    client = Client()
+    seen = []
+    for _ in range(2):
+        data, _ = post(
+            client, f"/dbtb-prd/{PFX}/{TITLE_PRD}/api/battle/get_diarkis_matching_server_info"
+        )
+        assert data[0]["result"] == 0
+        host, port, sid, aes, iv, mac = data[1][1]
+        assert host == settings.UDP_HOST
+        assert port == settings.UDP_PORT
+        assert data[1][2] == [1, 1]
+        seen.append(sid)
+        ks = KEY_REGISTRY[bytes.fromhex(sid)]
+        assert (ks.key.hex(), ks.iv.hex(), ks.mac.hex()) == (aes, iv, mac)
+    assert seen[0] != seen[1]  # fresh per call
+
+
+def test_issue_keyset_env_override(monkeypatch):
+    """Dev override: DIARKIS_*_KEY env vars pin a fixed key set."""
+    from diarkis_peer import KEY_REGISTRY, issue_keyset
+
+    monkeypatch.setenv("DIARKIS_SID_KEY", "11" * 16)
+    monkeypatch.setenv("DIARKIS_AES_KEY", "22" * 16)
+    monkeypatch.setenv("DIARKIS_IV_KEY", "33" * 16)
+    monkeypatch.setenv("DIARKIS_HASH_KEY", "44" * 16)
+    ks = issue_keyset()
+    assert ks.sid == bytes.fromhex("11" * 16)
+    assert KEY_REGISTRY[ks.sid] is ks
 
 
 def test_get_country():
