@@ -1,0 +1,56 @@
+﻿  CrashHandler.cpp
+  dllmain.cpp
+  exports.cpp
+  FakeSteamCore.cpp
+  FakeSteamFriends.cpp
+  FakeSteamGenericInterfaces.cpp
+  SteamInputEmulator.cpp
+  FakeSteamMatchmaking.cpp
+  FakeSteamMatchmakingServers.cpp
+  FakeSteamRemoteStorage.cpp
+  FakeSteamUserStats.cpp
+  Logger.cpp
+  HookManager.cpp
+  BackendStatus.cpp
+  NetworkHooks.cpp
+  OnlineCheckBypass.cpp
+  SteamAuth.cpp
+  LocalAuthTicket.cpp
+  AuthTicketRegistry.cpp
+  AuthTicketCallbacks.cpp
+  Generating Code...
+  Compiling...
+  SteamCallbackManager.cpp
+  SteamCallResultManager.cpp
+  SteamConfig.cpp
+  SteamDiagnostics.cpp
+  SupportBundle.cpp
+  SteamCoreForwarders.cpp
+  SteamFactoryRegistry.cpp
+  SteamIDManager.cpp
+  SteamInterfaceRouter.cpp
+  SteamLobbyManager.cpp
+  SteamNetworking.cpp
+  SteamOfflineServer.cpp
+  SteamP2PManager.cpp
+  SteamPacketLogger.cpp
+  SteamPersonaManager.cpp
+  SteamProxy.cpp
+  SteamSessionManager.cpp
+  SteamStatsLocal.cpp
+  SteamStorageLocal.cpp
+  SteamVersionLogger.cpp
+  Generating Code...
+  Compiling...
+  HttpResponse.cpp
+  HttpRequest.cpp
+  HttpCookieStore.cpp
+  HttpTransport.cpp
+  HttpRequestManager.cpp
+  HttpCallbacks.cpp
+  SteamHTTP.cpp
+  Generating Code...
+     Creating library D:\projects\BreakersRevived_CombinedVS\steam_api64\..\Bin\Debug\steam_api64.lib and object D:\projects\BreakersRevived_CombinedVS\steam_api64\..\Bin\Debug\steam_api64.exp
+  Generating code
+  Finished generating code
+  steam_api64.vcxproj -> D:\projects\BreakersRevived_CombinedVS\Bin\Debug\steam_api64.dll

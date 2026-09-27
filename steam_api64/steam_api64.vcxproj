@@ -1,0 +1,497 @@
+<?xml version='1.0' encoding='utf-8'?>
+<Project xmlns="http://schemas.microsoft.com/developer/msbuild/2003" DefaultTargets="Build">
+  <ItemGroup Label="ProjectConfigurations">
+    <ProjectConfiguration Include="Debug|Win32">
+      <Configuration>Debug</Configuration>
+      <Platform>Win32</Platform>
+    </ProjectConfiguration>
+    <ProjectConfiguration Include="Release|Win32">
+      <Configuration>Release</Configuration>
+      <Platform>Win32</Platform>
+    </ProjectConfiguration>
+    <ProjectConfiguration Include="Debug|x64">
+      <Configuration>Debug</Configuration>
+      <Platform>x64</Platform>
+    </ProjectConfiguration>
+    <ProjectConfiguration Include="Release|x64">
+      <Configuration>Release</Configuration>
+      <Platform>x64</Platform>
+    </ProjectConfiguration>
+  </ItemGroup>
+  <PropertyGroup Label="Globals">
+    <VCProjectVersion>18.0</VCProjectVersion>
+    <Keyword>Win32Proj</Keyword>
+    <ProjectGuid>{d262af8a-d686-4053-92e4-1f938978cf63}</ProjectGuid>
+    <RootNamespace>steamapi64</RootNamespace>
+    <WindowsTargetPlatformVersion>10.0</WindowsTargetPlatformVersion>
+  </PropertyGroup>
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.Default.props" />
+  <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'" Label="Configuration">
+    <ConfigurationType>DynamicLibrary</ConfigurationType>
+    <UseDebugLibraries>true</UseDebugLibraries>
+    <PlatformToolset>v143</PlatformToolset>
+    <CharacterSet>Unicode</CharacterSet>
+  </PropertyGroup>
+  <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release|Win32'" Label="Configuration">
+    <ConfigurationType>DynamicLibrary</ConfigurationType>
+    <UseDebugLibraries>false</UseDebugLibraries>
+    <PlatformToolset>v143</PlatformToolset>
+    <WholeProgramOptimization>true</WholeProgramOptimization>
+    <CharacterSet>Unicode</CharacterSet>
+  </PropertyGroup>
+  <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|x64'" Label="Configuration">
+    <ConfigurationType>DynamicLibrary</ConfigurationType>
+    <UseDebugLibraries>true</UseDebugLibraries>
+    <PlatformToolset>v143</PlatformToolset>
+    <CharacterSet>Unicode</CharacterSet>
+  </PropertyGroup>
+  <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'" Label="Configuration">
+    <ConfigurationType>DynamicLibrary</ConfigurationType>
+    <UseDebugLibraries>false</UseDebugLibraries>
+    <PlatformToolset>v143</PlatformToolset>
+    <WholeProgramOptimization>true</WholeProgramOptimization>
+    <CharacterSet>Unicode</CharacterSet>
+  </PropertyGroup>
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.props" />
+  <ImportGroup Label="ExtensionSettings">
+  </ImportGroup>
+  <ImportGroup Label="Shared">
+  </ImportGroup>
+  <ImportGroup Label="PropertySheets" Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'">
+    <Import Project="$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props" Condition="exists('$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props')" Label="LocalAppDataPlatform" />
+  </ImportGroup>
+  <ImportGroup Label="PropertySheets" Condition="'$(Configuration)|$(Platform)'=='Release|Win32'">
+    <Import Project="$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props" Condition="exists('$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props')" Label="LocalAppDataPlatform" />
+  </ImportGroup>
+  <ImportGroup Label="PropertySheets" Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">
+    <Import Project="$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props" Condition="exists('$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props')" Label="LocalAppDataPlatform" />
+  </ImportGroup>
+  <ImportGroup Label="PropertySheets" Condition="'$(Configuration)|$(Platform)'=='Release|x64'">
+    <Import Project="$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props" Condition="exists('$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props')" Label="LocalAppDataPlatform" />
+  </ImportGroup>
+  <PropertyGroup Label="UserMacros" />
+  <PropertyGroup Condition="'$(Platform)'=='x64'">
+    <MinHookLibName>libMinHook.x64.lib</MinHookLibName>
+  </PropertyGroup>
+  <PropertyGroup Condition="'$(Platform)'=='Win32'">
+  </PropertyGroup>
+  <PropertyGroup>
+    <OutDir>$(ProjectDir)..\Bin\$(Configuration)\</OutDir>
+    <IntDir>$(ProjectDir)Build\_obj\$(Platform)\$(Configuration)\</IntDir>
+  </PropertyGroup>
+  <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'">
+    <LinkIncremental>false</LinkIncremental>
+  </PropertyGroup>
+  <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release|Win32'">
+    <LinkIncremental>false</LinkIncremental>
+  </PropertyGroup>
+  <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">
+    <LinkIncremental>false</LinkIncremental>
+  </PropertyGroup>
+  <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'">
+    <LinkIncremental>false</LinkIncremental>
+  </PropertyGroup>
+  <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'">
+    <ClCompile>
+      <WarningLevel>Level3</WarningLevel>
+      <SDLCheck>true</SDLCheck>
+      <DebugInformationFormat>ProgramDatabase</DebugInformationFormat>
+      <PreprocessorDefinitions>WIN32_LEAN_AND_MEAN;NOMINMAX;_CRT_SECURE_NO_WARNINGS;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <ConformanceMode>true</ConformanceMode>
+      <LanguageStandard>stdcpp17</LanguageStandard>
+      <PrecompiledHeader>NotUsing</PrecompiledHeader>
+      <PrecompiledHeaderFile>pch.h</PrecompiledHeaderFile>
+      <AdditionalOptions>/FS %(AdditionalOptions)</AdditionalOptions>
+      <AdditionalIncludeDirectories>$(ProjectDir);$(ProjectDir)sdk_includes;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+    </ClCompile>
+    <Link>
+      <SubSystem>Windows</SubSystem>
+      <GenerateDebugInformation>true</GenerateDebugInformation>
+      <LinkTimeCodeGeneration>UseLinkTimeCodeGeneration</LinkTimeCodeGeneration>
+      <IgnoreSpecificDefaultLibraries>LIBCMT;%(IgnoreSpecificDefaultLibraries)</IgnoreSpecificDefaultLibraries>
+      <EnableUAC>false</EnableUAC>
+      <AdditionalDependencies>user32.lib;winhttp.lib;ws2_32.lib;$(MinHookLibName);%(AdditionalDependencies)</AdditionalDependencies>
+      <AdditionalLibraryDirectories>$(ProjectDir)lib;$(ProjectDir)libs;%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
+    </Link>
+    <Manifest>
+      <EnableSegmentHeap>true</EnableSegmentHeap>
+    </Manifest>
+  </ItemDefinitionGroup>
+  <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Release|Win32'">
+    <ClCompile>
+      <WarningLevel>Level3</WarningLevel>
+      <FunctionLevelLinking>true</FunctionLevelLinking>
+      <IntrinsicFunctions>true</IntrinsicFunctions>
+      <SDLCheck>true</SDLCheck>
+      <DebugInformationFormat>ProgramDatabase</DebugInformationFormat>
+      <PreprocessorDefinitions>WIN32_LEAN_AND_MEAN;NOMINMAX;_CRT_SECURE_NO_WARNINGS;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <ConformanceMode>true</ConformanceMode>
+      <LanguageStandard>stdcpp17</LanguageStandard>
+      <PrecompiledHeader>NotUsing</PrecompiledHeader>
+      <PrecompiledHeaderFile>pch.h</PrecompiledHeaderFile>
+      <AdditionalOptions>/FS %(AdditionalOptions)</AdditionalOptions>
+      <AdditionalIncludeDirectories>$(ProjectDir);$(ProjectDir)sdk_includes;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+    </ClCompile>
+    <Link>
+      <SubSystem>Windows</SubSystem>
+      <GenerateDebugInformation>true</GenerateDebugInformation>
+      <LinkTimeCodeGeneration>UseLinkTimeCodeGeneration</LinkTimeCodeGeneration>
+      <IgnoreSpecificDefaultLibraries>LIBCMT;%(IgnoreSpecificDefaultLibraries)</IgnoreSpecificDefaultLibraries>
+      <EnableUAC>false</EnableUAC>
+      <AdditionalDependencies>user32.lib;winhttp.lib;ws2_32.lib;$(MinHookLibName);%(AdditionalDependencies)</AdditionalDependencies>
+      <AdditionalLibraryDirectories>$(ProjectDir)lib;$(ProjectDir)libs;%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
+    </Link>
+    <Manifest>
+      <EnableSegmentHeap>true</EnableSegmentHeap>
+    </Manifest>
+  </ItemDefinitionGroup>
+  <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">
+    <ClCompile>
+      <WarningLevel>Level3</WarningLevel>
+      <SDLCheck>true</SDLCheck>
+      <DebugInformationFormat>ProgramDatabase</DebugInformationFormat>
+      <PreprocessorDefinitions>WIN32_LEAN_AND_MEAN;NOMINMAX;_CRT_SECURE_NO_WARNINGS;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <ConformanceMode>true</ConformanceMode>
+      <LanguageStandard>stdcpp17</LanguageStandard>
+      <PrecompiledHeader>NotUsing</PrecompiledHeader>
+      <PrecompiledHeaderFile>pch.h</PrecompiledHeaderFile>
+      <AdditionalOptions>/FS %(AdditionalOptions)</AdditionalOptions>
+      <AdditionalIncludeDirectories>$(ProjectDir);$(ProjectDir)sdk_includes;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+    </ClCompile>
+    <Link>
+      <SubSystem>Windows</SubSystem>
+      <GenerateDebugInformation>true</GenerateDebugInformation>
+      <LinkTimeCodeGeneration>UseLinkTimeCodeGeneration</LinkTimeCodeGeneration>
+      <IgnoreSpecificDefaultLibraries>LIBCMT;%(IgnoreSpecificDefaultLibraries)</IgnoreSpecificDefaultLibraries>
+      <EnableUAC>false</EnableUAC>
+      <AdditionalDependencies>user32.lib;winhttp.lib;ws2_32.lib;$(MinHookLibName);%(AdditionalDependencies)</AdditionalDependencies>
+      <AdditionalLibraryDirectories>$(ProjectDir)lib;$(ProjectDir)libs;%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
+    </Link>
+    <Manifest>
+      <EnableSegmentHeap>true</EnableSegmentHeap>
+    </Manifest>
+  </ItemDefinitionGroup>
+  <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'">
+    <ClCompile>
+      <WarningLevel>Level3</WarningLevel>
+      <FunctionLevelLinking>true</FunctionLevelLinking>
+      <IntrinsicFunctions>true</IntrinsicFunctions>
+      <SDLCheck>true</SDLCheck>
+      <DebugInformationFormat>ProgramDatabase</DebugInformationFormat>
+      <PreprocessorDefinitions>WIN32_LEAN_AND_MEAN;NOMINMAX;_CRT_SECURE_NO_WARNINGS;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <ConformanceMode>true</ConformanceMode>
+      <LanguageStandard>stdcpp17</LanguageStandard>
+      <PrecompiledHeader>NotUsing</PrecompiledHeader>
+      <PrecompiledHeaderFile>pch.h</PrecompiledHeaderFile>
+      <AdditionalOptions>/FS %(AdditionalOptions)</AdditionalOptions>
+      <AdditionalIncludeDirectories>$(ProjectDir);$(ProjectDir)sdk_includes;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+    </ClCompile>
+    <Link>
+      <SubSystem>Windows</SubSystem>
+      <GenerateDebugInformation>true</GenerateDebugInformation>
+      <LinkTimeCodeGeneration>UseLinkTimeCodeGeneration</LinkTimeCodeGeneration>
+      <IgnoreSpecificDefaultLibraries>LIBCMT;%(IgnoreSpecificDefaultLibraries)</IgnoreSpecificDefaultLibraries>
+      <EnableUAC>false</EnableUAC>
+      <AdditionalDependencies>user32.lib;winhttp.lib;ws2_32.lib;$(MinHookLibName);%(AdditionalDependencies)</AdditionalDependencies>
+      <AdditionalLibraryDirectories>$(ProjectDir)lib;$(ProjectDir)libs;%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
+    </Link>
+    <Manifest>
+      <EnableSegmentHeap>true</EnableSegmentHeap>
+    </Manifest>
+  </ItemDefinitionGroup>
+  <ItemGroup>
+    <ClInclude Include="CrashHandler.h" />
+    <ClInclude Include="FakeSteamBase.h" />
+    <ClInclude Include="FakeSteamCore.h" />
+    <ClInclude Include="FakeSteamInterfaces.h" />
+    <ClInclude Include="Input\SteamInputEmulator.h" />
+    <ClInclude Include="Logger.h" />
+    <ClInclude Include="HookManager.h" />
+    <ClInclude Include="MinHook.h" />
+    <ClInclude Include="BackendStatus.h" />
+    <ClInclude Include="NetworkHooks.h" />
+    <ClInclude Include="OnlineCheckBypass.h" />
+    <ClInclude Include="sdk_includes\isteamapplist.h" />
+    <ClInclude Include="sdk_includes\isteamapps.h" />
+    <ClInclude Include="sdk_includes\isteamapps001.h" />
+    <ClInclude Include="sdk_includes\isteamapps002.h" />
+    <ClInclude Include="sdk_includes\isteamapps003.h" />
+    <ClInclude Include="sdk_includes\isteamapps004.h" />
+    <ClInclude Include="sdk_includes\isteamapps005.h" />
+    <ClInclude Include="sdk_includes\isteamapps006.h" />
+    <ClInclude Include="sdk_includes\isteamapps007.h" />
+    <ClInclude Include="sdk_includes\isteamappticket.h" />
+    <ClInclude Include="sdk_includes\isteamclient.h" />
+    <ClInclude Include="sdk_includes\isteamclient007.h" />
+    <ClInclude Include="sdk_includes\isteamclient008.h" />
+    <ClInclude Include="sdk_includes\isteamclient009.h" />
+    <ClInclude Include="sdk_includes\isteamclient010.h" />
+    <ClInclude Include="sdk_includes\isteamclient011.h" />
+    <ClInclude Include="sdk_includes\isteamclient012.h" />
+    <ClInclude Include="sdk_includes\isteamclient013.h" />
+    <ClInclude Include="sdk_includes\isteamclient014.h" />
+    <ClInclude Include="sdk_includes\isteamclient015.h" />
+    <ClInclude Include="sdk_includes\isteamclient016.h" />
+    <ClInclude Include="sdk_includes\isteamclient017.h" />
+    <ClInclude Include="sdk_includes\isteamclient018.h" />
+    <ClInclude Include="sdk_includes\isteamclient019.h" />
+    <ClInclude Include="sdk_includes\isteamcontroller.h" />
+    <ClInclude Include="sdk_includes\isteamcontroller001.h" />
+    <ClInclude Include="sdk_includes\isteamcontroller002.h" />
+    <ClInclude Include="sdk_includes\isteamcontroller003.h" />
+    <ClInclude Include="sdk_includes\isteamcontroller004.h" />
+    <ClInclude Include="sdk_includes\isteamcontroller005.h" />
+    <ClInclude Include="sdk_includes\isteamcontroller006.h" />
+    <ClInclude Include="sdk_includes\isteamcontroller007.h" />
+    <ClInclude Include="sdk_includes\isteamfriends.h" />
+    <ClInclude Include="sdk_includes\isteamfriends003.h" />
+    <ClInclude Include="sdk_includes\isteamfriends004.h" />
+    <ClInclude Include="sdk_includes\isteamfriends005.h" />
+    <ClInclude Include="sdk_includes\isteamfriends006.h" />
+    <ClInclude Include="sdk_includes\isteamfriends007.h" />
+    <ClInclude Include="sdk_includes\isteamfriends008.h" />
+    <ClInclude Include="sdk_includes\isteamfriends009.h" />
+    <ClInclude Include="sdk_includes\isteamfriends010.h" />
+    <ClInclude Include="sdk_includes\isteamfriends011.h" />
+    <ClInclude Include="sdk_includes\isteamfriends012.h" />
+    <ClInclude Include="sdk_includes\isteamfriends013.h" />
+    <ClInclude Include="sdk_includes\isteamfriends014.h" />
+    <ClInclude Include="sdk_includes\isteamfriends015.h" />
+    <ClInclude Include="sdk_includes\isteamfriends016.h" />
+    <ClInclude Include="sdk_includes\isteamgamecoordinator.h" />
+    <ClInclude Include="sdk_includes\isteamgameserver.h" />
+    <ClInclude Include="sdk_includes\isteamgameserver004.h" />
+    <ClInclude Include="sdk_includes\isteamgameserver005.h" />
+    <ClInclude Include="sdk_includes\isteamgameserver008.h" />
+    <ClInclude Include="sdk_includes\isteamgameserver009.h" />
+    <ClInclude Include="sdk_includes\isteamgameserver010.h" />
+    <ClInclude Include="sdk_includes\isteamgameserver011.h" />
+    <ClInclude Include="sdk_includes\isteamgameserver012.h" />
+    <ClInclude Include="sdk_includes\isteamgameserver013.h" />
+    <ClInclude Include="sdk_includes\isteamgameserver014.h" />
+    <ClInclude Include="sdk_includes\isteamgameserverstats.h" />
+    <ClInclude Include="sdk_includes\isteamhtmlsurface.h" />
+    <ClInclude Include="sdk_includes\isteamhtmlsurface001.h" />
+    <ClInclude Include="sdk_includes\isteamhtmlsurface002.h" />
+    <ClInclude Include="sdk_includes\isteamhtmlsurface003.h" />
+    <ClInclude Include="sdk_includes\isteamhtmlsurface004.h" />
+    <ClInclude Include="sdk_includes\isteamhttp.h" />
+    <ClInclude Include="sdk_includes\isteamhttp001.h" />
+    <ClInclude Include="sdk_includes\isteamhttp002.h" />
+    <ClInclude Include="sdk_includes\isteaminput.h" />
+    <ClInclude Include="sdk_includes\isteaminput001.h" />
+    <ClInclude Include="sdk_includes\isteaminput002.h" />
+    <ClInclude Include="sdk_includes\isteaminput005.h" />
+    <ClInclude Include="sdk_includes\isteaminventory.h" />
+    <ClInclude Include="sdk_includes\isteaminventory001.h" />
+    <ClInclude Include="sdk_includes\isteaminventory002.h" />
+    <ClInclude Include="sdk_includes\isteammasterserverupdater.h" />
+    <ClInclude Include="sdk_includes\isteammatchmaking.h" />
+    <ClInclude Include="sdk_includes\isteammatchmaking002.h" />
+    <ClInclude Include="sdk_includes\isteammatchmaking003.h" />
+    <ClInclude Include="sdk_includes\isteammatchmaking004.h" />
+    <ClInclude Include="sdk_includes\isteammatchmaking005.h" />
+    <ClInclude Include="sdk_includes\isteammatchmaking006.h" />
+    <ClInclude Include="sdk_includes\isteammatchmaking007.h" />
+    <ClInclude Include="sdk_includes\isteammatchmaking008.h" />
+    <ClInclude Include="sdk_includes\isteammusic.h" />
+    <ClInclude Include="sdk_includes\isteammusicremote.h" />
+    <ClInclude Include="sdk_includes\isteamnetworking.h" />
+    <ClInclude Include="sdk_includes\isteamnetworking001.h" />
+    <ClInclude Include="sdk_includes\isteamnetworking002.h" />
+    <ClInclude Include="sdk_includes\isteamnetworking003.h" />
+    <ClInclude Include="sdk_includes\isteamnetworking004.h" />
+    <ClInclude Include="sdk_includes\isteamnetworking005.h" />
+    <ClInclude Include="sdk_includes\isteamnetworkingmessages.h" />
+    <ClInclude Include="sdk_includes\isteamnetworkingsockets.h" />
+    <ClInclude Include="sdk_includes\isteamnetworkingsockets001.h" />
+    <ClInclude Include="sdk_includes\isteamnetworkingsockets002.h" />
+    <ClInclude Include="sdk_includes\isteamnetworkingsockets003.h" />
+    <ClInclude Include="sdk_includes\isteamnetworkingsockets004.h" />
+    <ClInclude Include="sdk_includes\isteamnetworkingsockets006.h" />
+    <ClInclude Include="sdk_includes\isteamnetworkingsockets008.h" />
+    <ClInclude Include="sdk_includes\isteamnetworkingsockets009.h" />
+    <ClInclude Include="sdk_includes\isteamnetworkingsocketsserialized.h" />
+    <ClInclude Include="sdk_includes\isteamnetworkingutils.h" />
+    <ClInclude Include="sdk_includes\isteamnetworkingutils001.h" />
+    <ClInclude Include="sdk_includes\isteamnetworkingutils002.h" />
+    <ClInclude Include="sdk_includes\isteamnetworkingutils003.h" />
+    <ClInclude Include="sdk_includes\isteamparentalsettings.h" />
+    <ClInclude Include="sdk_includes\isteamps3overlayrenderer.h" />
+    <ClInclude Include="sdk_includes\isteamremoteplay.h" />
+    <ClInclude Include="sdk_includes\isteamremotestorage.h" />
+    <ClInclude Include="sdk_includes\isteamremotestorage001.h" />
+    <ClInclude Include="sdk_includes\isteamremotestorage002.h" />
+    <ClInclude Include="sdk_includes\isteamremotestorage003.h" />
+    <ClInclude Include="sdk_includes\isteamremotestorage004.h" />
+    <ClInclude Include="sdk_includes\isteamremotestorage005.h" />
+    <ClInclude Include="sdk_includes\isteamremotestorage006.h" />
+    <ClInclude Include="sdk_includes\isteamremotestorage007.h" />
+    <ClInclude Include="sdk_includes\isteamremotestorage008.h" />
+    <ClInclude Include="sdk_includes\isteamremotestorage009.h" />
+    <ClInclude Include="sdk_includes\isteamremotestorage010.h" />
+    <ClInclude Include="sdk_includes\isteamremotestorage011.h" />
+    <ClInclude Include="sdk_includes\isteamremotestorage012.h" />
+    <ClInclude Include="sdk_includes\isteamremotestorage013.h" />
+    <ClInclude Include="sdk_includes\isteamremotestorage014.h" />
+    <ClInclude Include="sdk_includes\isteamscreenshots.h" />
+    <ClInclude Include="sdk_includes\isteamtv.h" />
+    <ClInclude Include="sdk_includes\isteamugc.h" />
+    <ClInclude Include="sdk_includes\isteamugc001.h" />
+    <ClInclude Include="sdk_includes\isteamugc002.h" />
+    <ClInclude Include="sdk_includes\isteamugc003.h" />
+    <ClInclude Include="sdk_includes\isteamugc004.h" />
+    <ClInclude Include="sdk_includes\isteamugc005.h" />
+    <ClInclude Include="sdk_includes\isteamugc006.h" />
+    <ClInclude Include="sdk_includes\isteamugc007.h" />
+    <ClInclude Include="sdk_includes\isteamugc008.h" />
+    <ClInclude Include="sdk_includes\isteamugc009.h" />
+    <ClInclude Include="sdk_includes\isteamugc010.h" />
+    <ClInclude Include="sdk_includes\isteamugc012.h" />
+    <ClInclude Include="sdk_includes\isteamugc013.h" />
+    <ClInclude Include="sdk_includes\isteamugc014.h" />
+    <ClInclude Include="sdk_includes\isteamugc015.h" />
+    <ClInclude Include="sdk_includes\isteamugc016.h" />
+    <ClInclude Include="sdk_includes\isteamunifiedmessages.h" />
+    <ClInclude Include="sdk_includes\isteamuser.h" />
+    <ClInclude Include="sdk_includes\isteamuser009.h" />
+    <ClInclude Include="sdk_includes\isteamuser010.h" />
+    <ClInclude Include="sdk_includes\isteamuser011.h" />
+    <ClInclude Include="sdk_includes\isteamuser012.h" />
+    <ClInclude Include="sdk_includes\isteamuser013.h" />
+    <ClInclude Include="sdk_includes\isteamuser014.h" />
+    <ClInclude Include="sdk_includes\isteamuser015.h" />
+    <ClInclude Include="sdk_includes\isteamuser016.h" />
+    <ClInclude Include="sdk_includes\isteamuser017.h" />
+    <ClInclude Include="sdk_includes\isteamuser018.h" />
+    <ClInclude Include="sdk_includes\isteamuser019.h" />
+    <ClInclude Include="sdk_includes\isteamuser020.h" />
+    <ClInclude Include="sdk_includes\isteamuser021.h" />
+    <ClInclude Include="sdk_includes\isteamuser022.h" />
+    <ClInclude Include="sdk_includes\isteamuserstats.h" />
+    <ClInclude Include="sdk_includes\isteamuserstats001.h" />
+    <ClInclude Include="sdk_includes\isteamuserstats002.h" />
+    <ClInclude Include="sdk_includes\isteamuserstats003.h" />
+    <ClInclude Include="sdk_includes\isteamuserstats004.h" />
+    <ClInclude Include="sdk_includes\isteamuserstats005.h" />
+    <ClInclude Include="sdk_includes\isteamuserstats006.h" />
+    <ClInclude Include="sdk_includes\isteamuserstats007.h" />
+    <ClInclude Include="sdk_includes\isteamuserstats008.h" />
+    <ClInclude Include="sdk_includes\isteamuserstats009.h" />
+    <ClInclude Include="sdk_includes\isteamuserstats010.h" />
+    <ClInclude Include="sdk_includes\isteamuserstats011.h" />
+    <ClInclude Include="sdk_includes\isteamutils.h" />
+    <ClInclude Include="sdk_includes\isteamutils002.h" />
+    <ClInclude Include="sdk_includes\isteamutils003.h" />
+    <ClInclude Include="sdk_includes\isteamutils004.h" />
+    <ClInclude Include="sdk_includes\isteamutils005.h" />
+    <ClInclude Include="sdk_includes\isteamutils006.h" />
+    <ClInclude Include="sdk_includes\isteamutils007.h" />
+    <ClInclude Include="sdk_includes\isteamutils008.h" />
+    <ClInclude Include="sdk_includes\isteamutils009.h" />
+    <ClInclude Include="sdk_includes\isteamvideo.h" />
+    <ClInclude Include="sdk_includes\matchmakingtypes.h" />
+    <ClInclude Include="sdk_includes\steamclientpublic.h" />
+    <ClInclude Include="sdk_includes\steamdatagram_ticketgen.h" />
+    <ClInclude Include="sdk_includes\steamdatagram_tickets.h" />
+    <ClInclude Include="sdk_includes\steamencryptedappticket.h" />
+    <ClInclude Include="sdk_includes\steamhttpenums.h" />
+    <ClInclude Include="sdk_includes\steamnetworkingfakeip.h" />
+    <ClInclude Include="sdk_includes\steamnetworkingsockets.h" />
+    <ClInclude Include="sdk_includes\steamnetworkingtypes.h" />
+    <ClInclude Include="sdk_includes\steamps3params.h" />
+    <ClInclude Include="sdk_includes\steamtypes.h" />
+    <ClInclude Include="sdk_includes\steamuniverse.h" />
+    <ClInclude Include="sdk_includes\steam_api.h" />
+    <ClInclude Include="sdk_includes\steam_api_common.h" />
+    <ClInclude Include="sdk_includes\steam_api_flat.h" />
+    <ClInclude Include="sdk_includes\steam_api_internal.h" />
+    <ClInclude Include="sdk_includes\steam_gameserver.h" />
+    <ClInclude Include="StdInc.h" />
+    <ClInclude Include="Auth\SteamAuth.h" />
+    <ClInclude Include="Auth\LocalAuthTicket.h" />
+    <ClInclude Include="Auth\AuthTicketRegistry.h" />
+    <ClInclude Include="Auth\AuthTicketCallbacks.h" />
+    <ClInclude Include="SteamCallbackManager.h" />
+    <ClInclude Include="SteamCallResultManager.h" />
+    <ClInclude Include="SteamConfig.h" />
+    <ClInclude Include="SteamCoreForwarders.h" />
+    <ClInclude Include="SteamDiagnostics.h" />
+    <ClInclude Include="SupportBundle.h" />
+    <ClInclude Include="SteamFactoryRegistry.h" />
+    <ClInclude Include="SteamIDManager.h" />
+    <ClInclude Include="SteamInterfaceRouter.h" />
+    <ClInclude Include="SteamLobbyManager.h" />
+    <ClInclude Include="SteamOfflineServer.h" />
+    <ClInclude Include="SteamP2PManager.h" />
+    <ClInclude Include="SteamPacketLogger.h" />
+    <ClInclude Include="SteamPersonaManager.h" />
+    <ClInclude Include="SteamProxy.h" />
+    <ClInclude Include="SteamSessionManager.h" />
+    <ClInclude Include="SteamStatsLocal.h" />
+    <ClInclude Include="SteamStorageLocal.h" />
+    <ClInclude Include="SteamVersionLogger.h" />
+    <ClInclude Include="HTTP\HttpResponse.h" />
+    <ClInclude Include="HTTP\HttpRequest.h" />
+    <ClInclude Include="HTTP\HttpCookieStore.h" />
+    <ClInclude Include="HTTP\HttpTransport.h" />
+    <ClInclude Include="HTTP\HttpRequestManager.h" />
+    <ClInclude Include="HTTP\HttpCallbacks.h" />
+    <ClInclude Include="HTTP\SteamHTTP.h" />
+  </ItemGroup>
+  <ItemGroup>
+    <ClCompile Include="CrashHandler.cpp" />
+    <ClCompile Include="dllmain.cpp" />
+    <ClCompile Include="exports.cpp" />
+    <ClCompile Include="FakeSteamCore.cpp" />
+    <ClCompile Include="FakeSteamFriends.cpp" />
+    <ClCompile Include="FakeSteamGenericInterfaces.cpp" />
+    <ClCompile Include="Input\SteamInputEmulator.cpp" />
+    <ClCompile Include="FakeSteamMatchmaking.cpp" />
+    <ClCompile Include="FakeSteamMatchmakingServers.cpp" />
+    <ClCompile Include="FakeSteamRemoteStorage.cpp" />
+    <ClCompile Include="FakeSteamUserStats.cpp" />
+    <ClCompile Include="Logger.cpp" />
+    <ClCompile Include="HookManager.cpp" />
+    <ClCompile Include="BackendStatus.cpp" />
+    <ClCompile Include="NetworkHooks.cpp" />
+    <ClCompile Include="OnlineCheckBypass.cpp" />
+    <ClCompile Include="Auth\SteamAuth.cpp" />
+    <ClCompile Include="Auth\LocalAuthTicket.cpp" />
+    <ClCompile Include="Auth\AuthTicketRegistry.cpp" />
+    <ClCompile Include="Auth\AuthTicketCallbacks.cpp" />
+    <ClCompile Include="SteamCallbackManager.cpp" />
+    <ClCompile Include="SteamCallResultManager.cpp" />
+    <ClCompile Include="SteamConfig.cpp" />
+    <ClCompile Include="SteamDiagnostics.cpp" />
+    <ClCompile Include="SupportBundle.cpp" />
+    <ClCompile Include="SteamCoreForwarders.cpp" />
+    <ClCompile Include="SteamFactoryRegistry.cpp" />
+    <ClCompile Include="SteamIDManager.cpp" />
+    <ClCompile Include="SteamInterfaceRouter.cpp" />
+    <ClCompile Include="SteamLobbyManager.cpp" />
+    <ClCompile Include="SteamNetworking.cpp" />
+    <ClCompile Include="SteamOfflineServer.cpp" />
+    <ClCompile Include="SteamP2PManager.cpp" />
+    <ClCompile Include="SteamPacketLogger.cpp" />
+    <ClCompile Include="SteamPersonaManager.cpp" />
+    <ClCompile Include="SteamProxy.cpp" />
+    <ClCompile Include="SteamSessionManager.cpp" />
+    <ClCompile Include="SteamStatsLocal.cpp" />
+    <ClCompile Include="SteamStorageLocal.cpp" />
+    <ClCompile Include="SteamVersionLogger.cpp" />
+    <ClCompile Include="HTTP\HttpResponse.cpp" />
+    <ClCompile Include="HTTP\HttpRequest.cpp" />
+    <ClCompile Include="HTTP\HttpCookieStore.cpp" />
+    <ClCompile Include="HTTP\HttpTransport.cpp" />
+    <ClCompile Include="HTTP\HttpRequestManager.cpp" />
+    <ClCompile Include="HTTP\HttpCallbacks.cpp" />
+    <ClCompile Include="HTTP\SteamHTTP.cpp" />
+  </ItemGroup>
+  <ItemGroup>
+    <Library Include="libMinHook.x64.lib" />
+  </ItemGroup>
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
+  <ImportGroup Label="ExtensionTargets">
+  </ImportGroup>
+</Project>
