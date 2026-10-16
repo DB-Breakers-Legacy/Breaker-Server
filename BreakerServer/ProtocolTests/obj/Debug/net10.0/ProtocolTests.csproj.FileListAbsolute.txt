@@ -1,0 +1,14 @@
+D:\projects\Servers\BreakersRevived\BreakerServer\ProtocolTests\bin\Debug\net10.0\ProtocolTests.exe
+D:\projects\Servers\BreakersRevived\BreakerServer\ProtocolTests\bin\Debug\net10.0\ProtocolTests.deps.json
+D:\projects\Servers\BreakersRevived\BreakerServer\ProtocolTests\bin\Debug\net10.0\ProtocolTests.runtimeconfig.json
+D:\projects\Servers\BreakersRevived\BreakerServer\ProtocolTests\bin\Debug\net10.0\ProtocolTests.dll
+D:\projects\Servers\BreakersRevived\BreakerServer\ProtocolTests\bin\Debug\net10.0\ProtocolTests.pdb
+D:\projects\Servers\BreakersRevived\BreakerServer\ProtocolTests\obj\Debug\net10.0\ProtocolTests.GeneratedMSBuildEditorConfig.editorconfig
+D:\projects\Servers\BreakersRevived\BreakerServer\ProtocolTests\obj\Debug\net10.0\ProtocolTests.AssemblyInfoInputs.cache
+D:\projects\Servers\BreakersRevived\BreakerServer\ProtocolTests\obj\Debug\net10.0\ProtocolTests.AssemblyInfo.cs
+D:\projects\Servers\BreakersRevived\BreakerServer\ProtocolTests\obj\Debug\net10.0\ProtocolTests.csproj.CoreCompileInputs.cache
+D:\projects\Servers\BreakersRevived\BreakerServer\ProtocolTests\obj\Debug\net10.0\ProtocolTests.dll
+D:\projects\Servers\BreakersRevived\BreakerServer\ProtocolTests\obj\Debug\net10.0\refint\ProtocolTests.dll
+D:\projects\Servers\BreakersRevived\BreakerServer\ProtocolTests\obj\Debug\net10.0\ProtocolTests.pdb
+D:\projects\Servers\BreakersRevived\BreakerServer\ProtocolTests\obj\Debug\net10.0\ProtocolTests.genruntimeconfig.cache
+D:\projects\Servers\BreakersRevived\BreakerServer\ProtocolTests\obj\Debug\net10.0\ref\ProtocolTests.dll

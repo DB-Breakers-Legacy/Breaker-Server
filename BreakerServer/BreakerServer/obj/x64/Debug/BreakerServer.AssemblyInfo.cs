@@ -14,7 +14,7 @@ using System.Reflection;
 [assembly: System.Reflection.AssemblyCompanyAttribute("BreakerServer")]
 [assembly: System.Reflection.AssemblyConfigurationAttribute("Debug")]
 [assembly: System.Reflection.AssemblyFileVersionAttribute("1.0.0.0")]
-[assembly: System.Reflection.AssemblyInformationalVersionAttribute("1.0.0+efb70958e93cda667b69307b08602cd39b4ea890")]
+[assembly: System.Reflection.AssemblyInformationalVersionAttribute("1.0.0+774037ba3fab804e804cc9f5013aca686f5339f4")]
 [assembly: System.Reflection.AssemblyProductAttribute("BreakerServer")]
 [assembly: System.Reflection.AssemblyTitleAttribute("BreakerServer")]
 [assembly: System.Reflection.AssemblyVersionAttribute("1.0.0.0")]

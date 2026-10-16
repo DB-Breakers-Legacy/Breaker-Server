@@ -9,6 +9,7 @@ public static class Fragmentation
 
     public static byte[] Pack(ushort messageSequence, ushort index, ushort count, ReadOnlySpan<byte> chunk)
     {
+        if (count == 0 || index >= count) throw new ArgumentOutOfRangeException(nameof(index));
         var output = new byte[HeaderLength + chunk.Length];
         Magic.CopyTo(output, 0);
         output[4] = (byte)(messageSequence >> 8);
@@ -34,10 +35,12 @@ public static class Fragmentation
 
     public static DiarkisFragment? Parse(ReadOnlySpan<byte> payload, int offset = 0)
     {
+        if (offset < 0 || offset > payload.Length) return null;
         if (payload.Length - offset < HeaderLength || !payload.Slice(offset, 4).SequenceEqual(Magic)) return null;
         var msgSeq = (ushort)((payload[offset + 4] << 8) | payload[offset + 5]);
         var index = (ushort)((payload[offset + 6] << 8) | payload[offset + 7]);
         var count = (ushort)((payload[offset + 8] << 8) | payload[offset + 9]);
+        if (count == 0 || index >= count) throw new InvalidDataException("Invalid fragment index/count.");
         return new(msgSeq, index, count, payload[(offset + HeaderLength)..].ToArray());
     }
 
@@ -70,17 +73,51 @@ public static class Fragmentation
 
 public sealed class FragmentReassembler
 {
-    private readonly Dictionary<(ushort Sequence, ushort Count), Dictionary<ushort, byte[]>> _parts = [];
-
-    public byte[]? Add(DiarkisFragment fragment)
+    private sealed class Pending(ushort count, DateTimeOffset created)
     {
-        var key = (fragment.MessageSequence, fragment.Count);
-        if (!_parts.TryGetValue(key, out var parts)) _parts[key] = parts = [];
-        parts[fragment.Index] = fragment.Chunk;
-        if (parts.Count != fragment.Count) return null;
-        _parts.Remove(key);
-        using var stream = new MemoryStream();
-        for (ushort i = 0; i < fragment.Count; i++) stream.Write(parts[i]);
+        public ushort Count { get; } = count;
+        public DateTimeOffset Created { get; } = created;
+        public Dictionary<ushort, byte[]> Parts { get; } = [];
+        public int Bytes;
+    }
+
+    private readonly Dictionary<ushort, Pending> _parts = [];
+    private const int MaxMessageBytes = 16 * 1024 * 1024;
+    private const int MaxPendingMessages = 32;
+
+    // One instance per authenticated peer; never mix fragments from clients.
+    public byte[]? Add(DiarkisFragment fragment, DateTimeOffset? now = null)
+    {
+        var time = now ?? DateTimeOffset.UtcNow;
+        foreach (var key in _parts.Where(x => time - x.Value.Created > TimeSpan.FromSeconds(30))
+                     .Select(x => x.Key).ToArray()) _parts.Remove(key);
+        if (fragment.Count == 0 || fragment.Index >= fragment.Count)
+            throw new InvalidDataException("Invalid fragment index/count.");
+        if (!_parts.TryGetValue(fragment.MessageSequence, out var pending))
+        {
+            if (_parts.Count >= MaxPendingMessages)
+                throw new InvalidDataException("Too many incomplete messages.");
+            _parts[fragment.MessageSequence] = pending = new(fragment.Count, time);
+        }
+        if (pending.Count != fragment.Count)
+            throw new InvalidDataException("Fragment count changed within a message.");
+        if (pending.Parts.TryGetValue(fragment.Index, out var previous))
+        {
+            if (!previous.AsSpan().SequenceEqual(fragment.Chunk))
+                throw new InvalidDataException("Conflicting duplicate fragment.");
+            return null;
+        }
+        if (fragment.Chunk.Length > MaxMessageBytes - pending.Bytes)
+        {
+            _parts.Remove(fragment.MessageSequence);
+            throw new InvalidDataException("Fragmented message exceeds size limit.");
+        }
+        pending.Parts[fragment.Index] = fragment.Chunk.ToArray();
+        pending.Bytes += fragment.Chunk.Length;
+        if (pending.Parts.Count != pending.Count) return null;
+        _parts.Remove(fragment.MessageSequence);
+        using var stream = new MemoryStream(pending.Bytes);
+        for (var i = 0; i < pending.Count; i++) stream.Write(pending.Parts[(ushort)i]);
         return stream.ToArray();
     }
 }

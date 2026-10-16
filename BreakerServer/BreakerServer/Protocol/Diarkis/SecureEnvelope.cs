@@ -1,28 +1,56 @@
+using System;
+using System.Buffers.Binary;
 using System.Security.Cryptography;
 
 namespace BreakerServer.Protocol.Diarkis;
 
 public sealed record DiarkisKeySet(byte[] Sid, byte[] Key, byte[] Iv, byte[] Mac);
-public sealed record SecureEnvelopeResult(int PlaintextLength, byte[]? Plaintext, bool HmacOk, bool? SidOk, string Note);
+public sealed record SecureEnvelopeResult(int PlaintextLength, byte[]? Plaintext, bool HmacOk, bool PaddingOk, string Note);
 
 public static class SecureEnvelope
 {
-    private const int BlockSize = 16;
+    public const int BlockSize = 16;
+    public const int HmacSize = 32;
+    public const int HeaderSize = 4 + HmacSize;
+
+    public static DiarkisKeySet FromHex(string sid, string key, string iv, string mac)
+    {
+        var result = new DiarkisKeySet(
+            Convert.FromHexString(sid),
+            Convert.FromHexString(key),
+            Convert.FromHexString(iv),
+            Convert.FromHexString(mac));
+
+        Validate(result);
+        return result;
+    }
+
+    public static void Validate(DiarkisKeySet keys)
+    {
+        if (keys.Key.Length is not (16 or 24 or 32))
+            throw new InvalidOperationException($"Diarkis AES key must be 16, 24, or 32 bytes; got {keys.Key.Length}.");
+        if (keys.Iv.Length != BlockSize)
+            throw new InvalidOperationException($"Diarkis IV must be {BlockSize} bytes; got {keys.Iv.Length}.");
+        if (keys.Mac.Length == 0)
+            throw new InvalidOperationException("Diarkis HMAC key cannot be empty.");
+        if (keys.Sid.Length == 0)
+            throw new InvalidOperationException("Diarkis SID key cannot be empty.");
+    }
 
     public static byte[] Encrypt(ReadOnlySpan<byte> plaintext, DiarkisKeySet keys)
     {
-        var padded = plaintext.Length == 0
-            ? []
-            : plaintext.ToArray().Concat(new byte[BlockSize - (plaintext.Length % BlockSize)]).ToArray();
+        Validate(keys);
+
+        // The client always allocates one full CBC padding block when the
+        // plaintext is already block-aligned.
+        var padding = BlockSize - (plaintext.Length & (BlockSize - 1));
+        var padded = new byte[plaintext.Length + padding];
+        plaintext.CopyTo(padded);
+        padded.AsSpan(plaintext.Length).Fill((byte)padding);
 
         byte[] ciphertext;
-        if (padded.Length == 0)
+        using (var aes = Aes.Create())
         {
-            ciphertext = [];
-        }
-        else
-        {
-            using var aes = Aes.Create();
             aes.Key = keys.Key;
             aes.IV = keys.Iv;
             aes.Mode = CipherMode.CBC;
@@ -31,54 +59,76 @@ public static class SecureEnvelope
             ciphertext = encryptor.TransformFinalBlock(padded, 0, padded.Length);
         }
 
-        using var hmac = new HMACSHA256(keys.Mac);
-        var mac = hmac.ComputeHash(ciphertext);
-        var output = new byte[4 + mac.Length + ciphertext.Length];
-        output[0] = (byte)(plaintext.Length >> 24);
-        output[1] = (byte)(plaintext.Length >> 16);
-        output[2] = (byte)(plaintext.Length >> 8);
-        output[3] = (byte)plaintext.Length;
+        byte[] mac;
+        using (var hmac = new HMACSHA256(keys.Mac))
+            mac = hmac.ComputeHash(ciphertext);
+
+        var output = new byte[HeaderSize + ciphertext.Length];
+        BinaryPrimitives.WriteUInt32BigEndian(output.AsSpan(0, 4), checked((uint)plaintext.Length));
         mac.CopyTo(output, 4);
-        ciphertext.CopyTo(output, 36);
+        ciphertext.CopyTo(output, HeaderSize);
         return output;
     }
 
-    public static SecureEnvelopeResult Decrypt(ReadOnlySpan<byte> input, DiarkisKeySet keys, bool fromClient)
+    public static SecureEnvelopeResult Decrypt(ReadOnlySpan<byte> input, DiarkisKeySet keys)
     {
-        bool? sidOk = null;
-        if (fromClient)
+        Validate(keys);
+
+        if (input.Length < HeaderSize + BlockSize)
+            return new(0, null, false, false, $"short envelope len={input.Length}");
+
+        var declaredLength = BinaryPrimitives.ReadUInt32BigEndian(input[..4]);
+        if (declaredLength > int.MaxValue)
+            return new(0, null, false, false, "Invalid plaintext size.");
+        var plaintextLength = (int)declaredLength;
+        var expectedMac = input.Slice(4, HmacSize);
+        var ciphertext = input[HeaderSize..];
+
+        if (ciphertext.Length == 0 || ciphertext.Length % BlockSize != 0)
+            return new(plaintextLength, null, false, false, $"ciphertext len={ciphertext.Length} is not block aligned");
+
+        byte[] actualMac;
+        using (var hmac = new HMACSHA256(keys.Mac))
+            actualMac = hmac.ComputeHash(ciphertext.ToArray());
+
+        var hmacOk = CryptographicOperations.FixedTimeEquals(expectedMac, actualMac);
+        if (!hmacOk)
+            return new(plaintextLength, null, false, false, "HMAC-SHA256 mismatch");
+
+        byte[] padded;
+        try
         {
-            if (input.Length < 16) return new(0, null, false, false, "short");
-            sidOk = input[..16].SequenceEqual(keys.Sid);
-            input = input[16..];
+            using var aes = Aes.Create();
+            aes.Key = keys.Key;
+            aes.IV = keys.Iv;
+            aes.Mode = CipherMode.CBC;
+            aes.Padding = PaddingMode.None;
+            using var decryptor = aes.CreateDecryptor();
+            var ciphertextBytes = ciphertext.ToArray();
+            padded = decryptor.TransformFinalBlock(ciphertextBytes, 0, ciphertextBytes.Length);
+        }
+        catch (CryptographicException ex)
+        {
+            return new(plaintextLength, null, true, false, ex.Message);
         }
 
-        if (input.Length < 36) return new(0, null, false, sidOk, "short");
-        var plen = (input[0] << 24) | (input[1] << 16) | (input[2] << 8) | input[3];
-        var macField = input.Slice(4, 32).ToArray();
-        var ciphertext = input[36..].ToArray();
-        if (ciphertext.Length == 0 || ciphertext.Length % BlockSize != 0)
-            return new(plen, null, false, sidOk, $"odd-ct len={ciphertext.Length}");
+        if (padded.Length == 0)
+            return new(plaintextLength, null, true, false, "empty decrypted buffer");
 
-        using var hmac = new HMACSHA256(keys.Mac);
-        var hmacOk = CryptographicOperations.FixedTimeEquals(hmac.ComputeHash(ciphertext), macField);
+        var padding = padded[^1];
+        if (padding is 0 or > BlockSize || padding > padded.Length)
+            return new(plaintextLength, null, true, false, $"invalid CBC padding value={padding}");
 
-        using var aes = Aes.Create();
-        aes.Key = keys.Key;
-        aes.IV = keys.Iv;
-        aes.Mode = CipherMode.CBC;
-        aes.Padding = PaddingMode.None;
-        using var decryptor = aes.CreateDecryptor();
-        var plaintext = decryptor.TransformFinalBlock(ciphertext, 0, ciphertext.Length);
-        var nonZeroLength = plaintext.Length;
-        while (nonZeroLength > 0 && plaintext[nonZeroLength - 1] == 0) nonZeroLength--;
+        for (var i = padded.Length - padding; i < padded.Length; i++)
+        {
+            if (padded[i] != padding)
+                return new(plaintextLength, null, true, false, "invalid CBC padding bytes");
+        }
 
-        if (plen > 0 && plen <= ciphertext.Length && plaintext.AsSpan(plen).ToArray().All(x => x == 0))
-            return new(plen, plaintext[..plen], hmacOk, sidOk, string.Empty);
-        if (plen == 0)
-            return new(nonZeroLength, plaintext[..nonZeroLength], hmacOk, sidOk, "plen0-nonzero-tail");
-        if (hmacOk)
-            return new(plen, plaintext[..nonZeroLength], true, sidOk, $"pad-ext plen={plen} content={nonZeroLength}");
-        return new(plen, null, false, sidOk, "hmac/pad fail");
+        var unpaddedLength = padded.Length - padding;
+        if (plaintextLength != unpaddedLength)
+            return new(plaintextLength, null, true, true, $"payload size mismatch expected={plaintextLength} actual={unpaddedLength}");
+
+        return new(plaintextLength, padded[..unpaddedLength], true, true, string.Empty);
     }
 }

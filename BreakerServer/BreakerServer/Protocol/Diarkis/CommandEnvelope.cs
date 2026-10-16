@@ -10,6 +10,7 @@ public static class CommandEnvelopeCodec
 
     public static byte[] Build(ushort command, ReadOnlySpan<byte> body, byte version = 0, byte? status = null)
     {
+        if (body.Length > 0xFFFFFF) throw new ArgumentOutOfRangeException(nameof(body));
         var headerLength = status.HasValue ? ServerHeaderLength : ClientHeaderLength;
         var output = new byte[headerLength + body.Length];
         Magic.CopyTo(output, 0);
@@ -26,18 +27,19 @@ public static class CommandEnvelopeCodec
 
     public static CommandEnvelope Parse(ReadOnlySpan<byte> payload, bool fromClient, int offset = 0)
     {
-        if (payload.Length - offset < ClientHeaderLength || !payload.Slice(offset, 4).SequenceEqual(Magic))
-            throw new InvalidDataException("no envelope magic at offset");
+        var headerLength = fromClient ? ClientHeaderLength : ServerHeaderLength;
+        if (offset < 0 || offset > payload.Length || payload.Length - offset < headerLength ||
+            !payload.Slice(offset, 4).SequenceEqual(Magic))
+            throw new InvalidDataException("Invalid command envelope header.");
 
         var version = payload[offset + 4];
         var size = (payload[offset + 5] << 16) | (payload[offset + 6] << 8) | payload[offset + 7];
         var command = (ushort)((payload[offset + 8] << 8) | payload[offset + 9]);
-        var headerLength = fromClient ? ClientHeaderLength : ServerHeaderLength;
         byte? status = fromClient ? null : payload[offset + 10];
-        var available = Math.Max(0, payload.Length - offset - headerLength);
-        var take = Math.Min(size, available);
-        var body = payload.Slice(offset + headerLength, take).ToArray();
-        return new(version, command, status, size, body, headerLength + take);
+        if (size > payload.Length - offset - headerLength)
+            throw new InvalidDataException("Truncated command envelope body.");
+        var body = payload.Slice(offset + headerLength, size).ToArray();
+        return new(version, command, status, size, body, headerLength + size);
     }
 
     public static IEnumerable<CommandEnvelope> ParseAll(ReadOnlyMemory<byte> payload, bool fromClient)

@@ -1,8 +1,8 @@
 {
   "version": 2,
-  "dgSpecHash": "Ux+rY818NIA=",
+  "dgSpecHash": "mlzsyGhcras=",
   "success": true,
-  "projectFilePath": "D:\\projects\\BreakersRevived_CombinedVS\\Original\\BreakerServer\\BreakerServer\\BreakerServer.csproj",
+  "projectFilePath": "D:\\projects\\Servers\\BreakersRevived\\Original\\BreakerServer\\BreakerServer\\BreakerServer.csproj",
   "expectedPackageFiles": [
     "C:\\Users\\dylan\\.nuget\\packages\\messagepack\\3.1.4\\messagepack.3.1.4.nupkg.sha512",
     "C:\\Users\\dylan\\.nuget\\packages\\messagepack.annotations\\3.1.4\\messagepack.annotations.3.1.4.nupkg.sha512",
@@ -26,9 +26,9 @@
       "code": "NU1902",
       "level": "Warning",
       "message": "Package 'MessagePack' 3.1.4 has a known moderate severity vulnerability, https://github.com/advisories/GHSA-2f33-pr97-265q",
-      "projectPath": "D:\\projects\\BreakersRevived_CombinedVS\\Original\\BreakerServer\\BreakerServer\\BreakerServer.csproj",
+      "projectPath": "D:\\projects\\Servers\\BreakersRevived\\Original\\BreakerServer\\BreakerServer\\BreakerServer.csproj",
       "warningLevel": 1,
-      "filePath": "D:\\projects\\BreakersRevived_CombinedVS\\Original\\BreakerServer\\BreakerServer\\BreakerServer.csproj",
+      "filePath": "D:\\projects\\Servers\\BreakersRevived\\Original\\BreakerServer\\BreakerServer\\BreakerServer.csproj",
       "libraryId": "MessagePack",
       "targetGraphs": [
         "net10.0"
@@ -38,9 +38,9 @@
       "code": "NU1902",
       "level": "Warning",
       "message": "Package 'MessagePack' 3.1.4 has a known moderate severity vulnerability, https://github.com/advisories/GHSA-2x83-8g95-xh59",
-      "projectPath": "D:\\projects\\BreakersRevived_CombinedVS\\Original\\BreakerServer\\BreakerServer\\BreakerServer.csproj",
+      "projectPath": "D:\\projects\\Servers\\BreakersRevived\\Original\\BreakerServer\\BreakerServer\\BreakerServer.csproj",
       "warningLevel": 1,
-      "filePath": "D:\\projects\\BreakersRevived_CombinedVS\\Original\\BreakerServer\\BreakerServer\\BreakerServer.csproj",
+      "filePath": "D:\\projects\\Servers\\BreakersRevived\\Original\\BreakerServer\\BreakerServer\\BreakerServer.csproj",
       "libraryId": "MessagePack",
       "targetGraphs": [
         "net10.0"
@@ -50,9 +50,9 @@
       "code": "NU1903",
       "level": "Warning",
       "message": "Package 'MessagePack' 3.1.4 has a known high severity vulnerability, https://github.com/advisories/GHSA-382j-8mxh-c7x2",
-      "projectPath": "D:\\projects\\BreakersRevived_CombinedVS\\Original\\BreakerServer\\BreakerServer\\BreakerServer.csproj",
+      "projectPath": "D:\\projects\\Servers\\BreakersRevived\\Original\\BreakerServer\\BreakerServer\\BreakerServer.csproj",
       "warningLevel": 1,
-      "filePath": "D:\\projects\\BreakersRevived_CombinedVS\\Original\\BreakerServer\\BreakerServer\\BreakerServer.csproj",
+      "filePath": "D:\\projects\\Servers\\BreakersRevived\\Original\\BreakerServer\\BreakerServer\\BreakerServer.csproj",
       "libraryId": "MessagePack",
       "targetGraphs": [
         "net10.0"
@@ -62,9 +62,9 @@
       "code": "NU1902",
       "level": "Warning",
       "message": "Package 'MessagePack' 3.1.4 has a known moderate severity vulnerability, https://github.com/advisories/GHSA-cj9g-3mj2-g8vv",
-      "projectPath": "D:\\projects\\BreakersRevived_CombinedVS\\Original\\BreakerServer\\BreakerServer\\BreakerServer.csproj",
+      "projectPath": "D:\\projects\\Servers\\BreakersRevived\\Original\\BreakerServer\\BreakerServer\\BreakerServer.csproj",
       "warningLevel": 1,
-      "filePath": "D:\\projects\\BreakersRevived_CombinedVS\\Original\\BreakerServer\\BreakerServer\\BreakerServer.csproj",
+      "filePath": "D:\\projects\\Servers\\BreakersRevived\\Original\\BreakerServer\\BreakerServer\\BreakerServer.csproj",
       "libraryId": "MessagePack",
       "targetGraphs": [
         "net10.0"
@@ -74,9 +74,9 @@
       "code": "NU1902",
       "level": "Warning",
       "message": "Package 'MessagePack' 3.1.4 has a known moderate severity vulnerability, https://github.com/advisories/GHSA-cxmj-83gh-fp49",
-      "projectPath": "D:\\projects\\BreakersRevived_CombinedVS\\Original\\BreakerServer\\BreakerServer\\BreakerServer.csproj",
+      "projectPath": "D:\\projects\\Servers\\BreakersRevived\\Original\\BreakerServer\\BreakerServer\\BreakerServer.csproj",
       "warningLevel": 1,
-      "filePath": "D:\\projects\\BreakersRevived_CombinedVS\\Original\\BreakerServer\\BreakerServer\\BreakerServer.csproj",
+      "filePath": "D:\\projects\\Servers\\BreakersRevived\\Original\\BreakerServer\\BreakerServer\\BreakerServer.csproj",
       "libraryId": "MessagePack",
       "targetGraphs": [
         "net10.0"
@@ -86,9 +86,9 @@
       "code": "NU1903",
       "level": "Warning",
       "message": "Package 'MessagePack' 3.1.4 has a known high severity vulnerability, https://github.com/advisories/GHSA-hv8m-jj95-wg3x",
-      "projectPath": "D:\\projects\\BreakersRevived_CombinedVS\\Original\\BreakerServer\\BreakerServer\\BreakerServer.csproj",
+      "projectPath": "D:\\projects\\Servers\\BreakersRevived\\Original\\BreakerServer\\BreakerServer\\BreakerServer.csproj",
       "warningLevel": 1,
-      "filePath": "D:\\projects\\BreakersRevived_CombinedVS\\Original\\BreakerServer\\BreakerServer\\BreakerServer.csproj",
+      "filePath": "D:\\projects\\Servers\\BreakersRevived\\Original\\BreakerServer\\BreakerServer\\BreakerServer.csproj",
       "libraryId": "MessagePack",
       "targetGraphs": [
         "net10.0"
@@ -98,9 +98,9 @@
       "code": "NU1902",
       "level": "Warning",
       "message": "Package 'MessagePack' 3.1.4 has a known moderate severity vulnerability, https://github.com/advisories/GHSA-q2h6-ghwm-5qm8",
-      "projectPath": "D:\\projects\\BreakersRevived_CombinedVS\\Original\\BreakerServer\\BreakerServer\\BreakerServer.csproj",
+      "projectPath": "D:\\projects\\Servers\\BreakersRevived\\Original\\BreakerServer\\BreakerServer\\BreakerServer.csproj",
       "warningLevel": 1,
-      "filePath": "D:\\projects\\BreakersRevived_CombinedVS\\Original\\BreakerServer\\BreakerServer\\BreakerServer.csproj",
+      "filePath": "D:\\projects\\Servers\\BreakersRevived\\Original\\BreakerServer\\BreakerServer\\BreakerServer.csproj",
       "libraryId": "MessagePack",
       "targetGraphs": [
         "net10.0"
@@ -110,9 +110,9 @@
       "code": "NU1902",
       "level": "Warning",
       "message": "Package 'MessagePack' 3.1.4 has a known moderate severity vulnerability, https://github.com/advisories/GHSA-qhmf-xw27-6rqr",
-      "projectPath": "D:\\projects\\BreakersRevived_CombinedVS\\Original\\BreakerServer\\BreakerServer\\BreakerServer.csproj",
+      "projectPath": "D:\\projects\\Servers\\BreakersRevived\\Original\\BreakerServer\\BreakerServer\\BreakerServer.csproj",
       "warningLevel": 1,
-      "filePath": "D:\\projects\\BreakersRevived_CombinedVS\\Original\\BreakerServer\\BreakerServer\\BreakerServer.csproj",
+      "filePath": "D:\\projects\\Servers\\BreakersRevived\\Original\\BreakerServer\\BreakerServer\\BreakerServer.csproj",
       "libraryId": "MessagePack",
       "targetGraphs": [
         "net10.0"
@@ -122,9 +122,9 @@
       "code": "NU1902",
       "level": "Warning",
       "message": "Package 'MessagePack' 3.1.4 has a known moderate severity vulnerability, https://github.com/advisories/GHSA-v72x-2h86-7f8m",
-      "projectPath": "D:\\projects\\BreakersRevived_CombinedVS\\Original\\BreakerServer\\BreakerServer\\BreakerServer.csproj",
+      "projectPath": "D:\\projects\\Servers\\BreakersRevived\\Original\\BreakerServer\\BreakerServer\\BreakerServer.csproj",
       "warningLevel": 1,
-      "filePath": "D:\\projects\\BreakersRevived_CombinedVS\\Original\\BreakerServer\\BreakerServer\\BreakerServer.csproj",
+      "filePath": "D:\\projects\\Servers\\BreakersRevived\\Original\\BreakerServer\\BreakerServer\\BreakerServer.csproj",
       "libraryId": "MessagePack",
       "targetGraphs": [
         "net10.0"
@@ -134,9 +134,9 @@
       "code": "NU1903",
       "level": "Warning",
       "message": "Package 'MessagePack' 3.1.4 has a known high severity vulnerability, https://github.com/advisories/GHSA-vh6j-jc39-fggf",
-      "projectPath": "D:\\projects\\BreakersRevived_CombinedVS\\Original\\BreakerServer\\BreakerServer\\BreakerServer.csproj",
+      "projectPath": "D:\\projects\\Servers\\BreakersRevived\\Original\\BreakerServer\\BreakerServer\\BreakerServer.csproj",
       "warningLevel": 1,
-      "filePath": "D:\\projects\\BreakersRevived_CombinedVS\\Original\\BreakerServer\\BreakerServer\\BreakerServer.csproj",
+      "filePath": "D:\\projects\\Servers\\BreakersRevived\\Original\\BreakerServer\\BreakerServer\\BreakerServer.csproj",
       "libraryId": "MessagePack",
       "targetGraphs": [
         "net10.0"
@@ -146,9 +146,9 @@
       "code": "NU1902",
       "level": "Warning",
       "message": "Package 'MessagePack' 3.1.4 has a known moderate severity vulnerability, https://github.com/advisories/GHSA-w567-gjr2-hm5j",
-      "projectPath": "D:\\projects\\BreakersRevived_CombinedVS\\Original\\BreakerServer\\BreakerServer\\BreakerServer.csproj",
+      "projectPath": "D:\\projects\\Servers\\BreakersRevived\\Original\\BreakerServer\\BreakerServer\\BreakerServer.csproj",
       "warningLevel": 1,
-      "filePath": "D:\\projects\\BreakersRevived_CombinedVS\\Original\\BreakerServer\\BreakerServer\\BreakerServer.csproj",
+      "filePath": "D:\\projects\\Servers\\BreakersRevived\\Original\\BreakerServer\\BreakerServer\\BreakerServer.csproj",
       "libraryId": "MessagePack",
       "targetGraphs": [
         "net10.0"
@@ -158,9 +158,9 @@
       "code": "NU1902",
       "level": "Warning",
       "message": "Package 'MessagePack' 3.1.4 has a known moderate severity vulnerability, https://github.com/advisories/GHSA-wfr3-xj75-pfwh",
-      "projectPath": "D:\\projects\\BreakersRevived_CombinedVS\\Original\\BreakerServer\\BreakerServer\\BreakerServer.csproj",
+      "projectPath": "D:\\projects\\Servers\\BreakersRevived\\Original\\BreakerServer\\BreakerServer\\BreakerServer.csproj",
       "warningLevel": 1,
-      "filePath": "D:\\projects\\BreakersRevived_CombinedVS\\Original\\BreakerServer\\BreakerServer\\BreakerServer.csproj",
+      "filePath": "D:\\projects\\Servers\\BreakersRevived\\Original\\BreakerServer\\BreakerServer\\BreakerServer.csproj",
       "libraryId": "MessagePack",
       "targetGraphs": [
         "net10.0"
@@ -170,9 +170,9 @@
       "code": "NU1903",
       "level": "Warning",
       "message": "Package 'SQLitePCLRaw.lib.e_sqlite3' 2.1.11 has a known high severity vulnerability, https://github.com/advisories/GHSA-2m69-gcr7-jv3q",
-      "projectPath": "D:\\projects\\BreakersRevived_CombinedVS\\Original\\BreakerServer\\BreakerServer\\BreakerServer.csproj",
+      "projectPath": "D:\\projects\\Servers\\BreakersRevived\\Original\\BreakerServer\\BreakerServer\\BreakerServer.csproj",
       "warningLevel": 1,
-      "filePath": "D:\\projects\\BreakersRevived_CombinedVS\\Original\\BreakerServer\\BreakerServer\\BreakerServer.csproj",
+      "filePath": "D:\\projects\\Servers\\BreakersRevived\\Original\\BreakerServer\\BreakerServer\\BreakerServer.csproj",
       "libraryId": "SQLitePCLRaw.lib.e_sqlite3",
       "targetGraphs": [
         "net10.0"
