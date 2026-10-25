@@ -1,0 +1,23 @@
+[steam]
+mode=offline
+persona=BreakersRevived
+steamid=76561199006065889
+
+; Steam/LAN emulation
+custom_server=127.0.0.1
+custom_port=47584
+lan_only=1
+embedded_master=1
+
+; Game-service backend emulation
+backend_host=127.0.0.1
+backend_port=5000
+redirect_public_hosts=1
+
+; Local features
+block_official=1
+log_packets=1
+local_storage=1
+local_stats=1
+local_matchmaking=1
+auto_instance_steamid=1

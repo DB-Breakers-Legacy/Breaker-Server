@@ -1,0 +1,4 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup><OutputType>Exe</OutputType><TargetFramework>net10.0</TargetFramework><ImplicitUsings>enable</ImplicitUsings><Nullable>enable</Nullable></PropertyGroup>
+  <ItemGroup><Compile Include="..\BreakerServer\Protocol\Diarkis\*.cs" Link="Protocol\%(Filename)%(Extension)" /><Compile Include="..\BreakerServer\Services\RoomRegistry.cs" Link="Services\RoomRegistry.cs" /><Compile Include="..\BreakerServer\Services\SessionKeyRegistry.cs" Link="Services\SessionKeyRegistry.cs" /></ItemGroup>
+</Project>

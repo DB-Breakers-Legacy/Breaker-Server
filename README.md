@@ -3,72 +3,67 @@
 Community server-preservation reimplementation for **DRAGON BALL: THE BREAKERS**
 (title id `025348`), so the game remains playable after the official servers
 shut down. Ported from the reference custom server ("ProjectTemporal") and
-sanitized for public release.
+rewritten in **C# / ASP.NET Core** for continued development and public release.
 
 GPL-3.0. Not affiliated with Bandai Namco. Never point this at official
 infrastructure, Steam, or real player accounts — it is for local/private play
 and preservation research only.
 
-Current state: **lobby/menu HTTP API works; the actual match flow is not
-implemented yet** (Phase 0).
+Current state: **the C# server can progress the client through the menu and into
+the tutorial flow, but entering the actual game is not implemented yet**.
 
 ## Components
 
-1. **HTTP API** — Django 5.2 + MessagePack (`src/breakerapi/`, project
-   `src/breaker_server/`). The client POSTs MessagePack bodies despite a
-   form-urlencoded content-type; responses are msgpack with a rolling session
-   token. CDN-impersonation middleware (`server: nginx`, `via: 1.1 google`).
-2. **`diarkis/` codec package** (`src/diarkis/`) — bidirectional Diarkis RUDP
-   wire codec: datagram header, `FE BE DE EF` command envelope, secure envelope
-   (AES-128-CBC + HMAC-SHA256), `FF FE FD FC` fragmentation. Built from the
-   capture-verified decoder logic.
-3. **Diarkis UDP peer** (`src/diarkis_peer.py`, entry point `RUDPserver.py`) —
-   Twisted session transport + bootstrap on UDP 7100 (matchmaking) and 7102
-   (session-host redirect probe). Per-session state keyed by SID; per-session
-   random keys are issued by the HTTP handout endpoints and shared via the
-   in-process `KEY_REGISTRY`. **HTTP and UDP must run in one process** for the
-   registry to be shared: use `python manage.py rundiarkis`
-   (`RUDPserver.py` standalone is a dev entry point that only knows the
-   env-pinned key set, if any). Payload strings (0x012f pushes, redirect,
-   directory answer) are `.env`-configured.
-4. **STUN** (`stun/`) — external prerequisite (`stund`/STUNTMAN), config
-   template + docs only, no binaries. Ports 3478/3479.
+1. **HTTP API** — ASP.NET Core backend (`BreakerServer/`) implementing the
+   game's HTTP endpoints, request handling, MessagePack responses, session
+   state, authentication, configuration, and supporting services.
+
+2. **Diarkis protocol** (`BreakerServer/Protocol/` and `BreakerServer/Network/`)
+   — C# implementation of the Diarkis RUDP protocol used by the game, including
+   datagram handling, command envelopes, session packets, fragmentation, and
+   protocol-specific message processing.
+
+3. **Diarkis UDP services** (`BreakerServer/Network/`) — integrated UDP
+   services used for matchmaking and session communication. Session state and
+   keys are maintained by the server process so the HTTP and UDP systems can
+   share the same runtime state.
+
+4. **STUN** (`BreakerServer/Stun/`) — built-in C# STUN emulation used by the
+   client for network discovery. The server listens on the configured STUN
+   ports, including UDP 3478 and 3479.
 
 ## Setup
 
-```
-py -3.12 -m venv .venv        # or: python -m venv .venv
-.venv/Scripts/activate        # Windows; source .venv/bin/activate elsewhere
-make install                  # or: python -m pip install -r requirements.txt -r requirements-dev.txt
-cp .env.example .env          # fill it in (all committed values are placeholders)
-make migrate
-make run                      # python manage.py runserver
+```powershell
+dotnet restore BreakersRevived.sln
+dotnet build BreakersRevived.sln
+dotnet run --project BreakerServer
 ```
 
-Requires Python 3.12. `make` targets are all `python -m ...` invocations; if
-you don't have `make`, run the commands from the `Makefile` directly.
+The project can also be opened directly in Visual Studio using:
+
+```text
+BreakersRevived.sln
+```
+
+Build and run the `BreakerServer` project normally from Visual Studio.
 
 ## Development
 
-- `make lint` — ruff check + format check (`make format` to apply)
-- `make test` — unit tests (synthetic codec fixtures + Django endpoint tests)
-- `make test-golden` — codec gate against the private capture transcripts;
-  auto-skips unless `DIARKIS_TRANSCRIPTS_DIR` points at them. Transcripts and
-  other captured material live in the private documentation repo and are never
-  committed here.
-- `make test-integration` — placeholder (Phase 5)
+- `dotnet build BreakersRevived.sln` — build the complete C# solution.
+- `dotnet run --project BreakerServer` — start the local server.
+- `dotnet test` — run available automated tests.
+- Server systems are separated into dedicated C# components under
+  `BreakerServer/`, including authentication, configuration, endpoints,
+  networking, protocol handling, services, STUN, and data handling.
 
 ## Known issues / deliberate omissions
 
-- **Hypercorn `#BREADED` patch** (reference server patched
-  `hypercorn/protocol/h2.py` to fix DATA_END on the last data packet) is not
-  carried over — fragile across upgrades. HTTP/2 deployments may need an
-  equivalent fix; run plain `runserver` for development. `manage.py rundiarkis`
-  serves HTTP/1.1 via wsgiref (dev only) — the real client needs HTTP/2, so a
-  production one-process deployment must swap in hypercorn.
-- **channels/Redis** config from the reference server was dropped: websocket
-  routes were commented out and unreachable (ASGI pointed at the plain Django
-  application). Revisit if websockets ever become needed.
-- `adjustmentdata.txt` (≈56 KB captured game blob) is not committed; serve your
-  own copy via `ADJUSTMENT_DATA_PATH`.
+- The C# rewrite is still under active development and does not currently
+  complete the full game-entry flow.
+- The client can currently progress through the server connection process and
+  reach the tutorial flow.
+- Match/session behavior is still being implemented.
+- Some responses and game data are still placeholders while the remaining
+  protocol behavior is researched and implemented.
 - Canned leaderboard entries are synthetic placeholders.
