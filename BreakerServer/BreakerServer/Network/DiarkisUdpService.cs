@@ -113,7 +113,7 @@ public sealed class DiarkisUdpService(
         {
             state = new ClientState();
             _clients[key] = state;
-            logger.LogInformation(
+            logger.LogDebug(
                 "Diarkis client discovered {Remote} firstPacketBytes={Length} preview={Preview}",
                 remote,
                 data.Length,

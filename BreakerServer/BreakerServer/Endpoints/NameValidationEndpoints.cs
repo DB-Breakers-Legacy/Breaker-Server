@@ -31,9 +31,9 @@ public static class NameValidationEndpoints
             }
 
             logger.LogDebug(
-                "Accepted offline name validation name={Name} language={Language}",
-                name,
-                language);
+                "Accepted offline name validation nameLength={NameLength} languageLength={LanguageLength}",
+                name.Length,
+                language.Length);
 
             // Offline names are accepted locally.
             return responses.Respond(new object?[] { 0 });

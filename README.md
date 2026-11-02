@@ -34,25 +34,31 @@ the tutorial flow, but entering the actual game is not implemented yet**.
 
 ## Setup
 
+Configure four independent 16-byte Diarkis keys as hexadecimal strings. You can
+supply them with environment variables or .NET user-secrets. Do not commit them
+to `appsettings.json`. For example, in PowerShell:
+
 ```powershell
-dotnet restore BreakersRevived.sln
-dotnet build BreakersRevived.sln
-dotnet run --project BreakerServer
+$env:Breaker__DiarkisIvKey = "<32 hexadecimal characters>"
+$env:Breaker__DiarkisAesKey = "<32 hexadecimal characters>"
+$env:Breaker__DiarkisSidKey = "<32 hexadecimal characters>"
+$env:Breaker__DiarkisHashKey = "<32 hexadecimal characters>"
+dotnet restore BreakerServer/ProtocolTests/ProtocolTests.csproj
+dotnet build BreakerServer/BreakerServer/BreakerServer.csproj
+dotnet run --project BreakerServer/BreakerServer/BreakerServer.csproj
 ```
 
-The project can also be opened directly in Visual Studio using:
+Open `BreakersRevived.sln` in Visual Studio to work on the full solution. The
+native `steam_api64` project requires the Visual Studio C++ workload.
 
-```text
-BreakersRevived.sln
-```
-
-Build and run the `BreakerServer` project normally from Visual Studio.
+Use this authentication and protocol implementation only for local/private
+emulation. It does not validate tickets with Steam.
 
 ## Development
 
-- `dotnet build BreakersRevived.sln` — build the complete C# solution.
-- `dotnet run --project BreakerServer` — start the local server.
-- `dotnet test` — run available automated tests.
+- `dotnet build BreakerServer/BreakerServer/BreakerServer.csproj` — build the managed server.
+- `dotnet run --project BreakerServer/BreakerServer/BreakerServer.csproj` — start the local server.
+- `dotnet test BreakerServer/ProtocolTests/ProtocolTests.csproj` — run protocol, registry, and HTTP integration tests.
 - Server systems are separated into dedicated C# components under
   `BreakerServer/`, including authentication, configuration, endpoints,
   networking, protocol handling, services, STUN, and data handling.

@@ -23,8 +23,8 @@ public sealed class BreakerOptions
         "Assets/News/2d986ba27f06455090b72be37c8b7d48.png";
 
     public string AdjustmentDataPath { get; set; } = string.Empty;
-    public string DiarkisIvKey { get; set; } = new('0', 32);
-    public string DiarkisAesKey { get; set; } = new('0', 32);
-    public string DiarkisSidKey { get; set; } = new('0', 32);
-    public string DiarkisHashKey { get; set; } = new('0', 32);
+    public string DiarkisIvKey { get; set; } = string.Empty;
+    public string DiarkisAesKey { get; set; } = string.Empty;
+    public string DiarkisSidKey { get; set; } = string.Empty;
+    public string DiarkisHashKey { get; set; } = string.Empty;
 }

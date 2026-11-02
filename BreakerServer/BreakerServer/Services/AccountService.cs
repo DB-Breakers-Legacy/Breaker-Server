@@ -19,12 +19,23 @@ public sealed class AccountService(BreakerDbContext db, StarterDataStore starter
             UserCharactersJson = starter.CharactersJson
         };
         db.PatrollerUsers.Add(user);
-        await db.SaveChangesAsync(ct);
-        return user;
+        try
+        {
+            await db.SaveChangesAsync(ct);
+            return user;
+        }
+        catch (DbUpdateException)
+        {
+            db.Entry(user).State = EntityState.Detached;
+            var existing = await db.PatrollerUsers.FindAsync([userId], ct);
+            if (existing is not null) return existing;
+            throw;
+        }
     }
 
     public async Task<PatrollerUser> GetAsync(long userId, CancellationToken ct) =>
-        await db.PatrollerUsers.SingleAsync(x => x.UserId == userId, ct);
+        await db.PatrollerUsers.SingleOrDefaultAsync(x => x.UserId == userId, ct)
+        ?? throw new InvalidDataException("The authenticated account does not exist.");
 
     public object? Currency(PatrollerUser user) => ObjectTree.FromJson(user.GameCurrencyJson);
     public object? Messages(PatrollerUser user) => ObjectTree.FromJson(user.MessageListJson);

@@ -13,6 +13,7 @@ namespace BreakerServer.Network;
 
 public sealed class DiarkisSessionUdpService(
     IOptions<BreakerOptions> options,
+    Services.SessionKeyRegistry sessionKeys,
     ILogger<DiarkisSessionUdpService> logger) : BackgroundService
 {
     private enum NetworkSendState : byte
@@ -33,29 +34,16 @@ public sealed class DiarkisSessionUdpService(
         public int Sequence;
         public int PacketCount;
         public bool Established;
+        public DiarkisKeySet? Keys;
         public DateTimeOffset LastSeen = DateTimeOffset.UtcNow;
     }
 
     private readonly BreakerOptions _options = options.Value;
     private readonly Dictionary<string, ClientState> _clients = new(StringComparer.Ordinal);
-    private DiarkisKeySet? _keys;
+    private int _packetsSinceCleanup;
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
-        try
-        {
-            _keys = SecureEnvelope.FromHex(
-                _options.DiarkisSidKey,
-                _options.DiarkisAesKey,
-                _options.DiarkisIvKey,
-                _options.DiarkisHashKey);
-        }
-        catch (Exception ex)
-        {
-            logger.LogCritical(ex, "Invalid Diarkis session crypto configuration");
-            return;
-        }
-
         using var udp = new UdpClient(new IPEndPoint(IPAddress.Any, _options.UdpSessionPort));
         logger.LogInformation("Diarkis session service listening on UDP {Port}", _options.UdpSessionPort);
 
@@ -94,7 +82,7 @@ public sealed class DiarkisSessionUdpService(
         {
             state = new ClientState();
             _clients[key] = state;
-            logger.LogInformation(
+            logger.LogDebug(
                 "Diarkis session client discovered {Remote} firstPacketBytes={Length} preview={Preview}",
                 remote,
                 data.Length,
@@ -103,8 +91,19 @@ public sealed class DiarkisSessionUdpService(
 
         state.LastSeen = DateTimeOffset.UtcNow;
         state.PacketCount++;
+        CleanupStaleClients();
 
-        if (TrySplitControlFrames(data, out var frames))
+        if (state.Keys is null && data.Length >= 20 &&
+            sessionKeys.TryResolve(data.AsSpan(4, 16), out var resolvedKeys))
+            state.Keys = resolvedKeys;
+
+        if (state.Keys is null)
+        {
+            LogPacket(remote, data, "unknown or expired session");
+            return;
+        }
+
+        if (TrySplitControlFrames(data, state.Keys, out var frames))
         {
             foreach (var frame in frames)
                 await HandleControlFrameAsync(udp, frame, remote, state, ct);
@@ -215,24 +214,26 @@ public sealed class DiarkisSessionUdpService(
         await SendAsync(udp, DiarkisPacketFactory.Ack(incomingSequence), remote, ct);
 
         logger.LogInformation(
-            "Diarkis session ClientKey from={Remote} seq={Sequence} bytes={Length} preview={Preview}",
+            "Diarkis session ClientKey from={Remote} seq={Sequence} bytes={Length}",
             remote,
             incomingSequence,
-            data.Length,
-            Convert.ToHexString(data.AsSpan(0, Math.Min(data.Length, 48))));
+            data.Length);
 
         if (state.Established)
             return;
 
         var text = $"{AdvertisedPrefix()}:{remote.Port}";
         var packet = DiarkisPacketFactory.BuildCommand(
-            0, 3, 0x0001, 0, 0x01, 0x1B, Encoding.UTF8.GetBytes(text), _keys!);
+            0, 3, 0x0001, 0, 0x01, 0x1B, Encoding.UTF8.GetBytes(text), state.Keys!);
         await SendAsync(udp, packet, remote, ct);
         state.Established = true;
         logger.LogInformation("Diarkis session transport established for {Remote}", remote);
     }
 
-    private bool TrySplitControlFrames(byte[] data, out List<byte[]> frames)
+    private static bool TrySplitControlFrames(
+        byte[] data,
+        DiarkisKeySet keys,
+        out List<byte[]> frames)
     {
         frames = [];
         if (data.Length < 20 || data.Length % 20 != 0)
@@ -241,13 +242,9 @@ public sealed class DiarkisSessionUdpService(
         for (var offset = 0; offset < data.Length; offset += 20)
         {
             var frame = data.AsSpan(offset, 20);
-            if (frame[3] > (byte)NetworkSendState.SendFin)
-            {
-                frames.Clear();
-                return false;
-            }
-
-            if (_keys!.Sid.Length != 16 || !frame[4..20].SequenceEqual(_keys.Sid))
+            if (frame[3] > (byte)NetworkSendState.SendFin ||
+                keys.Sid.Length != 16 ||
+                !frame[4..20].SequenceEqual(keys.Sid))
             {
                 frames.Clear();
                 return false;
@@ -265,12 +262,23 @@ public sealed class DiarkisSessionUdpService(
             : $"Unknown{value}";
 
     private void LogPacket(IPEndPoint remote, byte[] data, string reason) =>
-        logger.LogInformation(
+        logger.LogDebug(
             "Diarkis session packet from={Remote} bytes={Length} reason={Reason} preview={Preview}",
             remote,
             data.Length,
             reason,
             Convert.ToHexString(data.AsSpan(0, Math.Min(data.Length, 96))));
+
+    private void CleanupStaleClients()
+    {
+        if (++_packetsSinceCleanup < 128)
+            return;
+
+        _packetsSinceCleanup = 0;
+        var cutoff = DateTimeOffset.UtcNow - TimeSpan.FromMinutes(2);
+        foreach (var pair in _clients.Where(x => x.Value.LastSeen < cutoff).ToArray())
+            _clients.Remove(pair.Key);
+    }
 
     private string AdvertisedPrefix()
     {

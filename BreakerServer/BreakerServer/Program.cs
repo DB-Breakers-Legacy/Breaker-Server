@@ -8,8 +8,13 @@ using BreakerServer.Services;
 using Microsoft.EntityFrameworkCore;
 
 var builder = WebApplication.CreateBuilder(args);
+builder.WebHost.ConfigureKestrel(options =>
+    options.Limits.MaxRequestBodySize = MessagePackHttp.MaxBodyBytes);
 
-builder.Services.Configure<BreakerOptions>(builder.Configuration.GetSection(BreakerOptions.SectionName));
+builder.Services.AddOptions<BreakerOptions>()
+    .Bind(builder.Configuration.GetSection(BreakerOptions.SectionName))
+    .Validate(HasValidDiarkisKeys, "Breaker Diarkis keys must be configured as hexadecimal strings with valid lengths.")
+    .ValidateOnStart();
 builder.Services.AddDbContext<BreakerDbContext>(options =>
     options.UseSqlite(builder.Configuration.GetConnectionString("Breaker") ?? "Data Source=breaker.db"));
 builder.Services.AddSingleton<ResponseCatalog>();
@@ -26,6 +31,7 @@ builder.Services.AddScoped<UserAuthService>();
 builder.Services.AddScoped<RequestIdentityResolver>();
 
 var app = builder.Build();
+app.UseMiddleware<BadRequestMiddleware>();
 app.UseMiddleware<RequestTraceMiddleware>();
 app.UseMiddleware<CdnHeadersMiddleware>();
 
@@ -48,3 +54,22 @@ app.MapGet("/emulation/status", (Microsoft.Extensions.Options.IOptions<BreakerOp
 
 app.MapBreakerApi();
 app.Run();
+
+static bool HasValidDiarkisKeys(BreakerOptions options)
+{
+    try
+    {
+        BreakerServer.Protocol.Diarkis.SecureEnvelope.FromHex(
+            options.DiarkisSidKey,
+            options.DiarkisAesKey,
+            options.DiarkisIvKey,
+            options.DiarkisHashKey);
+        return true;
+    }
+    catch (Exception ex) when (ex is FormatException or InvalidOperationException)
+    {
+        return false;
+    }
+}
+
+public partial class Program;

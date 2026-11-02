@@ -5,6 +5,8 @@ namespace BreakerServer.Infrastructure;
 
 public static class MessagePackHttp
 {
+    public const int MaxBodyBytes = 1024 * 1024;
+
     public static readonly MessagePackSerializerOptions Options =
         MessagePackSerializerOptions.Standard.WithResolver(ContractlessStandardResolver.Instance);
 
