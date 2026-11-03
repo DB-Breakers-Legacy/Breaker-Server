@@ -6,6 +6,8 @@ Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "steam_api64", "steam_api64\
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "BreakerServer", "BreakerServer\BreakerServer\BreakerServer.csproj", "{2B05377F-96CD-4AC4-B76B-A984F0EED8BE}"
 EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "ProtocolTests", "BreakerServer\ProtocolTests\ProtocolTests.csproj", "{A74D8CFE-81BC-4D43-9F20-903E593C8C11}"
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|x64 = Debug|x64
@@ -20,6 +22,10 @@ Global
 		{2B05377F-96CD-4AC4-B76B-A984F0EED8BE}.Debug|x64.Build.0 = Debug|x64
 		{2B05377F-96CD-4AC4-B76B-A984F0EED8BE}.Release|x64.ActiveCfg = Release|x64
 		{2B05377F-96CD-4AC4-B76B-A984F0EED8BE}.Release|x64.Build.0 = Release|x64
+		{A74D8CFE-81BC-4D43-9F20-903E593C8C11}.Debug|x64.ActiveCfg = Debug|Any CPU
+		{A74D8CFE-81BC-4D43-9F20-903E593C8C11}.Debug|x64.Build.0 = Debug|Any CPU
+		{A74D8CFE-81BC-4D43-9F20-903E593C8C11}.Release|x64.ActiveCfg = Release|Any CPU
+		{A74D8CFE-81BC-4D43-9F20-903E593C8C11}.Release|x64.Build.0 = Release|Any CPU
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE

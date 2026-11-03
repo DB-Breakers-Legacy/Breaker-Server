@@ -42,13 +42,20 @@ public static class ObjectTree
         return value;
     }
 
-    public static List<object?> List(object? value) => value switch
+    public static List<object?> List(object? value, int minimumCount = 0)
     {
-        List<object?> list => list,
-        object?[] array => array.ToList(),
-        IEnumerable enumerable when value is not string => enumerable.Cast<object?>().ToList(),
-        _ => throw new InvalidDataException("Expected MessagePack array.")
-    };
+        var result = value switch
+        {
+            List<object?> list => list,
+            object?[] array => array.ToList(),
+            IEnumerable enumerable when value is not string => enumerable.Cast<object?>().ToList(),
+            _ => throw new InvalidDataException("Expected MessagePack array.")
+        };
+
+        if (result.Count < minimumCount)
+            throw new InvalidDataException($"Expected at least {minimumCount} MessagePack array values.");
+        return result;
+    }
 
     public static Dictionary<object, object?> Map(object? value)
     {

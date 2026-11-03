@@ -1,4 +1,3 @@
-using System.Globalization;
 using BreakerServer.Infrastructure;
 
 namespace BreakerServer.Authentication;
@@ -12,19 +11,13 @@ public sealed class RequestIdentityResolver(
         var rawUserId = ReadUserId(bodyObj);
         var value = ObjectTree.Text(rawUserId).Trim();
 
-        if (long.TryParse(value, NumberStyles.None, CultureInfo.InvariantCulture, out var numericId) && numericId > 0)
-            return numericId;
-
         if (sessions.TryGet(value, out var authSession) && authSession is not null)
         {
-            logger.LogDebug(
-                "Resolved authenticated request token {Token} to user {UserId}",
-                value,
-                authSession.UserId);
+            logger.LogDebug("Resolved authenticated request to user {UserId}", authSession.UserId);
             return authSession.UserId;
         }
 
-        throw new InvalidDataException("Request metadata userId is neither a numeric user id nor an active auth token.");
+        throw new InvalidDataException("Request metadata userId is not an active auth token.");
     }
 
     private static object? ReadUserId(object? bodyObj)

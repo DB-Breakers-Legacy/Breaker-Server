@@ -57,8 +57,8 @@ public static class ApiEndpoints
             ApiResponseService responses,
             CancellationToken ct) =>
         {
-            var body = ObjectTree.List(await MessagePackHttp.ReadAsync(request, ct));
-            var args = ObjectTree.List(body[1]);
+            var body = ObjectTree.List(await MessagePackHttp.ReadAsync(request, ct), 2);
+            var args = ObjectTree.List(body[1], 1);
             return responses.Respond(new object?[] { 0, ObjectTree.Text(args[0]), 0 });
         });
 
@@ -130,13 +130,14 @@ public static class ApiEndpoints
             CancellationToken ct) =>
         {
             var bodyObj = await MessagePackHttp.ReadAsync(request, ct);
-            var body = ObjectTree.List(bodyObj);
+            var body = ObjectTree.List(bodyObj, 2);
             var user = await accounts.GetAsync(identity.ResolveUserId(bodyObj), ct);
-            var requested = ObjectTree.Int32(ObjectTree.List(body[1])[0]);
+            var requested = ObjectTree.Int32(ObjectTree.List(body[1], 1)[0]);
             var rivals = ObjectTree.List(accounts.Rivals(user));
             var rows = ObjectTree.List(rivals[1]);
             var raider = rows.Select(ObjectTree.List)
-                .First(x => ObjectTree.Int32(x[0]) == requested);
+                .FirstOrDefault(x => ObjectTree.Int32(x[0]) == requested)
+                ?? throw new InvalidDataException("The requested rival does not exist.");
 
             var points = ObjectTree.Int32(raider[3]);
             foreach (var item in ObjectTree.List(raider[4]).Select(ObjectTree.List))
@@ -169,18 +170,19 @@ public static class ApiEndpoints
             CancellationToken ct) =>
         {
             var bodyObj = await MessagePackHttp.ReadAsync(request, ct);
-            var body = ObjectTree.List(bodyObj);
+            var body = ObjectTree.List(bodyObj, 2);
             var user = await accounts.GetAsync(identity.ResolveUserId(bodyObj), ct);
             var rivals = ObjectTree.List(accounts.Rivals(user));
             var rows = ObjectTree.List(rivals[1]);
 
-            foreach (var train in ObjectTree.List(ObjectTree.List(body[1])[0]).Select(ObjectTree.List))
+            foreach (var train in ObjectTree.List(ObjectTree.List(body[1], 1)[0]).Select(x => ObjectTree.List(x, 3)))
             {
                 var raiderId = ObjectTree.Int32(train[0]);
                 var skillId = ObjectTree.Int32(train[1]);
                 var newLevel = ObjectTree.Int32(train[2]);
                 var raider = rows.Select(ObjectTree.List)
-                    .First(x => ObjectTree.Int32(x[0]) == raiderId);
+                    .FirstOrDefault(x => ObjectTree.Int32(x[0]) == raiderId)
+                    ?? throw new InvalidDataException("The requested rival does not exist.");
                 var left = ObjectTree.Int32(raider[3]) - newLevel;
 
                 if (left < 0)
@@ -250,12 +252,15 @@ public static class ApiEndpoints
         api.MapPost("/message/get_message_info", async (
             HttpRequest request,
             ApiResponseService responses,
+            RequestIdentityResolver identity,
             BreakerDbContext db,
             CancellationToken ct) =>
         {
-            var body = ObjectTree.List(await MessagePackHttp.ReadAsync(request, ct));
-            var id = ObjectTree.Text(ObjectTree.List(body[1])[2]);
-            var message = await db.MessageBots.SingleAsync(x => x.MessageId == id, ct);
+            var body = ObjectTree.List(await MessagePackHttp.ReadAsync(request, ct), 2);
+            identity.ResolveUserId(body);
+            var id = ObjectTree.Text(ObjectTree.List(body[1], 3)[2]);
+            var message = await db.MessageBots.SingleOrDefaultAsync(x => x.MessageId == id, ct)
+                ?? throw new InvalidDataException("The requested message does not exist.");
             return responses.Respond(ObjectTree.FromJson(message.MessageContentsJson));
         });
 
@@ -270,15 +275,16 @@ public static class ApiEndpoints
             CancellationToken ct) =>
         {
             var bodyObj = await MessagePackHttp.ReadAsync(request, ct);
-            var body = ObjectTree.List(bodyObj);
-            var pair = ObjectTree.List(ObjectTree.List(ObjectTree.List(body[1])[0])[0]);
+            var body = ObjectTree.List(bodyObj, 2);
+            var pair = ObjectTree.List(ObjectTree.List(ObjectTree.List(body[1], 1)[0], 1)[0], 2);
             var characterId = ObjectTree.Int32(pair[0]);
             var attackId = ObjectTree.Int32(pair[1]);
             var user = await accounts.GetAsync(identity.ResolveUserId(bodyObj), ct);
             var characters = ObjectTree.List(accounts.Characters(user));
             var rows = ObjectTree.List(characters[1]);
             var target = rows.Select(ObjectTree.List)
-                .First(x => ObjectTree.Int32(x[0]) == characterId);
+                .FirstOrDefault(x => ObjectTree.Int32(x[0]) == characterId)
+                ?? throw new InvalidDataException("The requested character does not exist.");
 
             ObjectTree.List(target[4]).Add(new object?[]
             {
@@ -328,9 +334,9 @@ public static class ApiEndpoints
             ApiResponseService responses,
             CancellationToken ct) =>
         {
-            var body = ObjectTree.List(await MessagePackHttp.ReadAsync(request, ct));
-            var args = ObjectTree.List(body[1]);
-            var roster = ObjectTree.List(args[1]);
+            var body = ObjectTree.List(await MessagePackHttp.ReadAsync(request, ct), 2);
+            var args = ObjectTree.List(body[1], 2);
+            var roster = ObjectTree.List(args[1], 1);
             var leader = ObjectTree.Text(roster[0]);
             var battleId = $"{leader}_{DateTimeOffset.Now:yyyyMMddHHmmss}";
 

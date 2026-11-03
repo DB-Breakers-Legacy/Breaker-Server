@@ -17,31 +17,23 @@ public sealed class UserAuthService(
         if (!NetworkToken.TryParse(request.NetworkToken, out var token) || token is null)
             return Failure("NetworkToken is not uppercase hexadecimal.");
 
-        uint serial = 0;
-        var ticketKind = "opaque-platform";
-        ulong? embeddedSteamId = null;
+        if (!LocalSteamTicket.TryParse(token.Bytes, out var localTicket) || localTicket is null)
+            return Failure("NetworkToken is not a valid Breakers Revived local ticket.");
 
-        if (LocalSteamTicket.TryParse(token.Bytes, out var localTicket) && localTicket is not null)
-        {
-            ticketKind = "breakers-revived";
-            serial = localTicket.Serial;
-            embeddedSteamId = localTicket.SteamId;
-        }
+        if (localTicket.SteamId != (ulong)request.NumericId)
+            return Failure("Local ticket does not match the requested user.");
 
         await accounts.GetOrCreateAsync(request.NumericId, ct);
-        var session = sessions.Create(request.NumericId, serial);
+        var session = sessions.Create(request.NumericId, localTicket.Serial);
 
         logger.LogInformation(
-            "user/auth accepted numericId={NumericId} arg3={Argument3} ticket={TicketKind} ticketBytes={TicketBytes} embeddedSteamId={EmbeddedSteamId} serial={Serial} authToken={AuthToken}",
+            "user/auth accepted numericId={NumericId} arg3={Argument3} ticketBytes={TicketBytes} serial={Serial}",
             request.NumericId,
             request.Argument3,
-            ticketKind,
             token.Bytes.Length,
-            embeddedSteamId,
-            serial,
-            session.Session);
+            localTicket.Serial);
 
-        return new UserAuthResult(true, session.Session, ticketKind);
+        return new UserAuthResult(true, session.Session, "breakers-revived");
     }
 
     private UserAuthResult Failure(string reason)

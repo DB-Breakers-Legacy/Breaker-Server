@@ -16,24 +16,17 @@ public static class AuthEndpoints
             UserAuthService auth,
             CancellationToken ct) =>
         {
-            try
-            {
-                var body = await MessagePackHttp.ReadAsync(request, ct);
-                var parsed = UserAuthRequest.Parse(body);
-                var result = await auth.AuthenticateAsync(parsed, ct);
+            var body = await MessagePackHttp.ReadAsync(request, ct);
+            var parsed = UserAuthRequest.Parse(body);
+            var result = await auth.AuthenticateAsync(parsed, ct);
 
-                if (!result.Success)
-                    return responses.Respond(new object?[] { 1, new object?[] { string.Empty, 0 } }, string.Empty, false);
-
-                return responses.Respond(
-                    new object?[] { 0, new object?[] { result.AuthToken, 0 } },
-                    result.AuthToken,
-                    false);
-            }
-            catch (Exception ex) when (ex is InvalidDataException or FormatException or OverflowException)
-            {
+            if (!result.Success)
                 return responses.Respond(new object?[] { 1, new object?[] { string.Empty, 0 } }, string.Empty, false);
-            }
+
+            return responses.Respond(
+                new object?[] { 0, new object?[] { result.AuthToken, 0 } },
+                result.AuthToken,
+                false);
         });
 
         return app;

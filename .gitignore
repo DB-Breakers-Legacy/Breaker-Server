@@ -1,0 +1,16 @@
+[Bb]in/
+[Oo]bj/
+Build/
+TestResults/
+.vs/
+.sandbox-dotnet/
+*.user
+*.suo
+*.db
+*.db-shm
+*.db-wal
+.env
+.env.*
+!.env.example
+steam_config.ini
+Logs/
