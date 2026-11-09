@@ -35,7 +35,6 @@ public sealed class DiarkisUdpService(
         public IPEndPoint Remote { get; set; } = remote;
         public int NextSequence { get; set; }
         public ushort FragmentSequence { get; set; }
-        public int PacketCount { get; set; }
         public bool Bootstrapped { get; set; }
         public string? ClientPublicAddress { get; set; }
         public string? ClientLanAddress { get; set; }
@@ -241,7 +240,6 @@ public sealed class DiarkisUdpService(
 
         state.Remote = remote;
         state.LastSeen = DateTimeOffset.UtcNow;
-        state.PacketCount++;
 
         if (reliable)
             await SendAsync(udp, DiarkisPacketFactory.Ack(header.Sequence), remote, ct);

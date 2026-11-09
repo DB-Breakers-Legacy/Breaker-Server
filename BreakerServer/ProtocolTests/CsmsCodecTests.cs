@@ -143,13 +143,6 @@ public sealed class CsmsCodecTests
         throw new InvalidOperationException("Unable to construct the requested golden size.");
     }
 
-    private static bool Contains(ReadOnlySpan<byte> haystack, ReadOnlySpan<byte> needle)
-    {
-        for (var offset = 0; offset <= haystack.Length - needle.Length; offset++)
-        {
-            if (haystack.Slice(offset, needle.Length).SequenceEqual(needle))
-                return true;
-        }
-        return false;
-    }
+    private static bool Contains(ReadOnlySpan<byte> haystack, ReadOnlySpan<byte> needle) =>
+        haystack.IndexOf(needle) >= 0;
 }

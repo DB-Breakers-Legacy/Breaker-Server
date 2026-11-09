@@ -70,22 +70,17 @@ Do not start a broad whole-binary decompilation project.
   bounded and are removed on FIN/expiry.
 - Confirm the queue-version and selectable-stage responses during the same run.
 
-## Ponytail review - optional small cleanup
+## Ponytail review - cleanup completed
 
-These reductions are optional and should not delay live validation:
+Applied all four reductions without changing protocol behavior:
 
-- `DiarkisPacketFactory.cs:23`: replace the manual `Combine` allocation/copy
-  loop with `parts.SelectMany(x => x).ToArray()` (about 11 lines).
-- `DiarkisUdpService.cs:38`: remove the unused `PacketCount` property and its
-  increment (about 2 lines).
-- `ConnectionRoomCoordinator.cs:90`: collapse the duplicate room-command
-  overloads into the `CommandEnvelope` API used by production and tests (about
-  5 lines).
-- `CsmsCodecTests.cs:146`: replace the manual byte-pattern search with
-  `Span<byte>.IndexOf` (about 9 lines).
+- `DiarkisPacketFactory.Combine` now uses `SelectMany(...).ToArray()`.
+- Removed the unused UDP `PacketCount` state.
+- Collapsed room-command handling to one `CommandEnvelope` API.
+- Replaced the test byte-search loop with `Span<byte>.IndexOf`.
 
-Estimated reduction: about 27 lines. Apply these only with the existing suite
-passing, and keep them separate from protocol behavior changes.
+The cleanup removes about 27 lines and is committed separately from protocol
+behavior changes.
 
 ## Commit and PR checklist
 
@@ -99,7 +94,7 @@ passing, and keep them separate from protocol behavior changes.
 - [ ] Provisional queue responses confirmed.
 - [ ] Invitation spelling resolved.
 - [ ] Long multi-peer soak completed.
-- [ ] Optional ponytail reductions applied or deliberately deferred.
+- [x] Ponytail reductions applied.
 
 Continue committing each completed milestone or evidence-backed fix together
 with its short summary in `new-matchmaking-research.md`.

@@ -89,30 +89,24 @@ public sealed class ConnectionRoomCoordinator(MatchmakingCoordinator matchmaking
 
     public IReadOnlyList<OutgoingRoomCommand> HandleRoomCommand(
         string userId,
-        CommandEnvelope envelope) =>
-        HandleRoomCommand(userId, envelope.Command, envelope.Body);
-
-    public IReadOnlyList<OutgoingRoomCommand> HandleRoomCommand(
-        string userId,
-        ushort command,
-        byte[] plaintext)
+        CommandEnvelope envelope)
     {
         lock (_sync)
         {
             var (room, member) = RequireRoomMember(userId);
-            return command switch
+            return envelope.Command switch
             {
                 11 => MemberList(room),
                 101 => [Reply(member, 101, 1, RoomGuidResponse(room))],
-                102 => Detach(room, member, plaintext),
-                103 => RegisterMemberId(room, member, plaintext),
+                102 => Detach(room, member, envelope.Body),
+                103 => RegisterMemberId(room, member, envelope.Body),
                 115 => [Reply(member, 115, 1, "OK"u8.ToArray())],
                 127 => [Reply(member, 127, 0, [0])],
-                19 => RelayProfile(room, member, plaintext, command: 19),
-                24 => RelayProfile(room, member, plaintext, command: 24),
-                104 => RelayMessage(room, member, plaintext),
+                19 => RelayProfile(room, member, envelope.Body, command: 19),
+                24 => RelayProfile(room, member, envelope.Body, command: 24),
+                104 => RelayMessage(room, member, envelope.Body),
                 301 => P2PComplete(member),
-                _ => throw new InvalidDataException($"Unsupported session-room command {command}.")
+                _ => throw new InvalidDataException($"Unsupported session-room command {envelope.Command}.")
             };
         }
     }
