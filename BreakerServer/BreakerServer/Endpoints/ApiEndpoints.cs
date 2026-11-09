@@ -318,19 +318,24 @@ public static class ApiEndpoints
             return responses.Respond(new object?[] { 0, result, 696969 });
         });
 
-        api.MapPost("/battle/get_connection_server_info", (
+        api.MapPost("/battle/get_connection_server_info", async (
+            HttpRequest request,
             ApiResponseService responses,
             SessionKeyRegistry registry,
-            IOptions<BreakerOptions> options) =>
+            MatchmakingCoordinator coordinator,
+            RequestIdentityResolver identity,
+            CancellationToken ct) =>
         {
+            var body = await MessagePackHttp.ReadAsync(request, ct);
+            var binding = coordinator.GetConnectionBinding(identity.ResolveUserId(body).ToString());
             var keys = registry.Create();
             return responses.Respond(new object?[]
             {
                 0,
                 new object?[]
                 {
-                    options.Value.UdpHost,
-                    options.Value.UdpSessionPort,
+                    binding.Host,
+                    binding.Port,
                     keys.Sid,
                     keys.Aes,
                     keys.Iv,

@@ -307,6 +307,61 @@ public sealed class DiarkisUdpServiceTests
     }
 
     [Fact]
+    public async Task MatchmakingCreateEmitsPushResponseAndQueueKeepalive()
+    {
+        var registry = new SessionKeyRegistry();
+        var port = FreeUdpPort();
+        var coordinator = new MatchmakingCoordinator(Options.Create(new BreakerOptions
+        {
+            UdpHost = "127.0.0.1",
+            UdpSessionPort = 7102
+        }));
+        var service = CreateService(
+            port,
+            registry,
+            retransmitInterval: TimeSpan.FromMilliseconds(100),
+            coordinator: coordinator);
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(8));
+        using var client = new FakeClient(port, registry.Create(), timeout.Token);
+        await service.StartAsync(timeout.Token);
+        try
+        {
+            await client.SynAsync();
+            await client.InitAsync();
+            await client.ReceiveAckAsync(0);
+            await client.ReceiveCommandAsync(0x0001);
+            await client.ReceiveCommandAsync(0x012F);
+            await client.AckServerAsync(0, 1);
+
+            var request = CsmsCodec.BuildRequest(
+                "100000000000000001",
+                3,
+                12000,
+                "{\"gameRule\":0,\"userName\":\"Player1\",\"sdpData\":\"{}\"}");
+            await client.SendCommandAsync(0x2EE0, request, version: 1);
+            await client.ReceiveAckAsync(1);
+
+            var roomPush = await client.ReceiveCommandAsync(0x2EE0);
+            var pushPacket = CsmsCodec.Parse(roomPush.Plaintext, fromClient: false);
+            Assert.Equal(12120U, pushPacket.SubId);
+            Assert.True(pushPacket.IsPush);
+            var createResponse = await client.ReceiveCommandAsync(0x2EE0);
+            var responsePacket = CsmsCodec.Parse(createResponse.Plaintext, fromClient: false);
+            Assert.Equal(13000U, responsePacket.SubId);
+            Assert.False(responsePacket.IsPush);
+            await client.AckServerAsync(2, 3);
+
+            var keepalive = await client.ReceiveCommandAsync(0x00DB);
+            Assert.Equal("Timeout"u8.ToArray(), keepalive.Plaintext);
+            await client.AckServerAsync(4);
+        }
+        finally
+        {
+            await service.StopAsync(CancellationToken.None);
+        }
+    }
+
+    [Fact]
     public async Task DirectoryReplyIsClearTextAndFlipsTheFlag()
     {
         var port = FreeUdpPort();
@@ -348,7 +403,8 @@ public sealed class DiarkisUdpServiceTests
         int port,
         SessionKeyRegistry registry,
         TimeSpan? retransmitInterval = null,
-        bool sessionListener = false) =>
+        bool sessionListener = false,
+        MatchmakingCoordinator? coordinator = null) =>
         new(
             Options.Create(new BreakerOptions
             {
@@ -360,7 +416,8 @@ public sealed class DiarkisUdpServiceTests
             NullLogger<DiarkisUdpService>.Instance,
             sessionListener,
             registry,
-            retransmitInterval);
+            retransmitInterval,
+            coordinator);
 
     private static byte[] AddressPayload(string host, int port)
     {

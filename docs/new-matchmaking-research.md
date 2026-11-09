@@ -268,7 +268,7 @@ Verification:
   without dropping the listener;
 - the join spelling disagreement is resolved before that field is encoded.
 
-### Milestone 3 - Implement the matchmaking room coordinator
+### Milestone 3 - Implement the matchmaking room coordinator (complete for synthetic match assembly)
 
 Implement 12000 create, 12001 invite/rematch join, 12002 keepalive, 12005 member
 update, 12012 search preferences, and 12017 completion. Maintain shared room,
@@ -440,6 +440,39 @@ This completes Milestone 2 for framing and synthetic fragmentation. It does not
 implement room semantics, encode the unresolved join-invitation field, or claim
 native-client interoperability. No live game test was run.
 
+### Milestone 3 result - synthetic eight-player match assembly
+
+Implemented `Services/MatchmakingCoordinator.cs` and connected it to the live
+CSMS/UDP path and HTTP connection handout:
+
+- Handles 12000 create, 12001 invite/rematch join, 12002 keepalive, 12005 member
+  update, 12012 preferences, and 12017 completion with shared player/room state.
+- Emits ordered 13000-series responses and 12101, 12102, 12105, 12118, 12119,
+  and 12120 pushes. Invite joins share and update the existing room roster.
+- Assembles eight completed players, assigns one Raider and seven Survivors,
+  emits role assignment followed by 64 targeted final-roster variants and one
+  shared connection-room binding per player.
+- Emits command-219 `Timeout` queue keepalives and removes duplicate, expired,
+  disconnected, and requeued players from stale room/queue state.
+- `get_connection_server_info` now requires the authenticated user's assembled
+  battle and returns its binding with a fresh UDP key set.
+
+Verification:
+
+- Release build passed with zero warnings and zero errors.
+- All 64 tests passed. Eight synthetic coordinator clients reach a complete
+  battle, every member has consistent role/final-roster data, a generated final
+  roster survives fragmentation, and the authenticated HTTP handout succeeds
+  only after assembly.
+- Invite/rematch join, duplicate create, expiry, disconnect, requeue, live UDP
+  create/push/response order, and queue keepalive are covered.
+- `dotnet format` on `ProtocolTests.csproj` passed. The server-only check still
+  reports only the four unrelated baseline import-order findings.
+
+This completes Milestone 3 for synthetic match assembly. Connection-room
+commands, P2P, and native-client interoperability remain unverified. No live game
+test was run.
+
 ## Findings log
 
 ### 2026-11-08 - New baseline and initial executable/header correlation
@@ -493,6 +526,16 @@ native-client interoperability. No live game test was run.
 - Expanded the managed suite to 59 passing tests without changing room behavior
   or claiming live-client interoperability.
 
+### 2026-11-08 - Milestone 3 synthetic match assembly completed
+
+- Added the room coordinator, invite/rematch membership, queue lifecycle, role
+  assignment, final rosters, and battle-specific connection binding.
+- Eight synthetic players complete the battle-room flow with consistent roster
+  data and one shared connection-room ID.
+- Live UDP create/push/response and queue keepalive paths are covered, along
+  with the authenticated connection handout.
+- Expanded the managed suite to 64 passing tests; no native game test was run.
+
 ## Next update checklist
 
 - [x] Record the build/test/format result on merged PR #5; build and tests pass,
@@ -502,5 +545,5 @@ native-client interoperability. No live game test was run.
 - [ ] Resolve the join-field spelling disagreement with capture evidence.
 - [x] Complete Milestone 1 golden transport tests.
 - [x] Complete Milestone 2 CSMS and fragmentation tests.
-- [ ] Record the first isolated eight-client result without claiming success
+- [x] Record the first isolated eight-client result without claiming success
       before the captured exit criteria pass.

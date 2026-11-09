@@ -13,7 +13,8 @@ public sealed class DiarkisUdpService(
     ILogger<DiarkisUdpService> logger,
     bool sessionListener = false,
     Services.SessionKeyRegistry? sessionKeys = null,
-    TimeSpan? retransmitInterval = null) : BackgroundService
+    TimeSpan? retransmitInterval = null,
+    Services.MatchmakingCoordinator? coordinator = null) : BackgroundService
 {
     private const int MaxFragmentChunkBytes = 1200;
     private const int MaxRememberedDatagrams = 256;
@@ -37,6 +38,9 @@ public sealed class DiarkisUdpService(
         public bool Bootstrapped { get; set; }
         public string? ClientPublicAddress { get; set; }
         public string? ClientLanAddress { get; set; }
+        public string? UserId { get; set; }
+        public ushort Platform { get; set; }
+        public DateTimeOffset NextQueueKeepalive { get; set; } = DateTimeOffset.UtcNow;
         public DateTimeOffset LastSeen { get; set; } = DateTimeOffset.UtcNow;
         public Dictionary<int, PendingDatagram> Unacked { get; } = [];
         public FragmentReassembler Fragments { get; } = new();
@@ -190,6 +194,7 @@ public sealed class DiarkisUdpService(
             return;
 
         await SendAsync(udp, DiarkisPacketFactory.Ack(state.NextSequence), remote, ct);
+        coordinator?.RemoveSession(state.UserId);
         _sessions.Remove(SidKey(payload.Span));
         logger.LogInformation("Diarkis session closed for {Remote}", remote);
     }
@@ -287,12 +292,10 @@ public sealed class DiarkisUdpService(
             case 0x0131:
                 return;
             case 0x2EE0:
-                ValidateCsms(state, envelope.Command, plaintext);
-                return;
             case 0x55F0:
-                if (!ValidateCsms(state, envelope.Command, plaintext))
+                if (!await ProcessCsmsAsync(udp, state, envelope.Command, plaintext, ct))
                     return;
-                if (sessionListener)
+                if (envelope.Command == 0x55F0 && sessionListener)
                 {
                     var redirect = DiarkisPacketFactory.Combine(
                         [0xBE, 0xEF, 0xFE, 0xED],
@@ -306,17 +309,42 @@ public sealed class DiarkisUdpService(
         }
     }
 
-    private bool ValidateCsms(ClientState state, ushort command, ReadOnlySpan<byte> plaintext)
+    private async Task<bool> ProcessCsmsAsync(
+        UdpClient udp,
+        ClientState state,
+        ushort command,
+        byte[] plaintext,
+        CancellationToken ct)
     {
         try
         {
             var packet = CsmsCodec.Parse(plaintext, fromClient: true);
-            logger.LogInformation(
-                "Validated CSMS command {Command} sub-ID {SubId} for user {UserId} on {Listener} listener",
-                command,
-                packet.SubId,
-                packet.UserId,
-                sessionListener ? "session" : "matching");
+            state.UserId = packet.UserId;
+            state.Platform = packet.Platform;
+            if (command == 0x2EE0 && coordinator is not null)
+            {
+                var messages = coordinator.Handle(packet);
+                foreach (var message in messages)
+                {
+                    var response = CsmsCodec.BuildResponse(
+                        message.TargetUserId,
+                        message.TargetPlatform,
+                        message.SubId,
+                        message.Data,
+                        push: message.Push);
+                    foreach (var target in _sessions.Values.Where(x => x.UserId == message.TargetUserId))
+                    {
+                        await SendCommandAsync(
+                            udp,
+                            target,
+                            command,
+                            1,
+                            message.Push ? (byte)0xFF : (byte)1,
+                            response,
+                            ct);
+                    }
+                }
+            }
             return true;
         }
         catch (InvalidDataException ex)
@@ -427,6 +455,14 @@ public sealed class DiarkisUdpService(
                     ct);
                 pair.Value.LastSent = now;
             }
+
+            if (!sessionListener && coordinator?.IsQueued(state.UserId) == true &&
+                now >= state.NextQueueKeepalive)
+            {
+                await SendCommandAsync(udp, state, 0x00DB, 1, 0xFF,
+                    Encoding.ASCII.GetBytes("Timeout"), ct);
+                state.NextQueueKeepalive = now + TimeSpan.FromSeconds(5);
+            }
         }
     }
 
@@ -459,9 +495,14 @@ public sealed class DiarkisUdpService(
             return;
 
         _packetsSinceCleanup = 0;
-        var cutoff = DateTimeOffset.UtcNow - TimeSpan.FromMinutes(2);
+        var now = DateTimeOffset.UtcNow;
+        coordinator?.Expire(now);
+        var cutoff = now - TimeSpan.FromMinutes(2);
         foreach (var pair in _sessions.Where(x => x.Value.LastSeen < cutoff).ToArray())
+        {
+            coordinator?.RemoveSession(pair.Value.UserId);
             _sessions.Remove(pair.Key);
+        }
     }
 
     private static bool TryParseInitAddresses(

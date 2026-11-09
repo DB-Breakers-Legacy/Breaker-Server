@@ -136,6 +136,35 @@ public sealed class ApiIntegrationTests : IClassFixture<BreakerApiFactory>
     }
 
     [Fact]
+    public async Task ConnectionHandoutRequiresAssembledBattleBinding()
+    {
+        var coordinator = _factory.Services.GetRequiredService<BreakerServer.Services.MatchmakingCoordinator>();
+        for (var index = 1; index <= 8; index++)
+        {
+            var userId = index == 1 ? UserId.ToString() : $"10000000000000000{index}";
+            var created = coordinator.Handle(new BreakerServer.Protocol.Diarkis.CsmsPacket(
+                userId, 3, 12000, "025348", "{\"gameRule\":0}", false));
+            var roomId = System.Text.Json.JsonDocument.Parse(created[1].Data)
+                .RootElement.GetProperty("roomId").GetString()!;
+            coordinator.Handle(new BreakerServer.Protocol.Diarkis.CsmsPacket(
+                userId, 3, 12017, "025348",
+                System.Text.Json.JsonSerializer.Serialize(new { roomId }), false));
+        }
+
+        var token = await Authenticate(UserId, UserId);
+        using var response = await Post(
+            "/dbtb-prd/LALALALALA/025348/api/battle/get_connection_server_info",
+            AuthenticatedBody(token));
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        var body = ObjectTree.List(await ReadResponse(response));
+        var result = ObjectTree.List(body[1]);
+        Assert.Equal(0, ObjectTree.Int32(result[0]));
+        var handout = ObjectTree.List(result[1], 6);
+        Assert.True(ObjectTree.Int32(handout[1]) > 0);
+        Assert.Equal(32, ObjectTree.Text(handout[2]).Length);
+    }
+
+    [Fact]
     public async Task MessageInfoRequiresAuthenticationAndKnownMessage()
     {
         using var anonymous = await Post(
