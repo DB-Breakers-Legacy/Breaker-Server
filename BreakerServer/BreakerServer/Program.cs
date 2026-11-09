@@ -6,6 +6,7 @@ using BreakerServer.Infrastructure;
 using BreakerServer.Network;
 using BreakerServer.Services;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Options;
 
 var builder = WebApplication.CreateBuilder(args);
 builder.WebHost.ConfigureKestrel(options =>
@@ -22,8 +23,14 @@ builder.Services.AddSingleton<StarterDataStore>();
 builder.Services.AddSingleton<SessionTokenService>();
 builder.Services.AddSingleton<SessionKeyRegistry>();
 builder.Services.AddSingleton<AuthSessionRegistry>();
-builder.Services.AddHostedService<DiarkisUdpService>();
-builder.Services.AddHostedService<DiarkisSessionUdpService>();
+builder.Services.AddHostedService(services => new DiarkisUdpService(
+    services.GetRequiredService<IOptions<BreakerOptions>>(),
+    services.GetRequiredService<ILogger<DiarkisUdpService>>()));
+builder.Services.AddHostedService(services => new DiarkisUdpService(
+    services.GetRequiredService<IOptions<BreakerOptions>>(),
+    services.GetRequiredService<ILogger<DiarkisUdpService>>(),
+    sessionListener: true,
+    sessionKeys: services.GetRequiredService<SessionKeyRegistry>()));
 builder.Services.AddHostedService<StunUdpService>();
 builder.Services.AddScoped<ApiResponseService>();
 builder.Services.AddScoped<AccountService>();

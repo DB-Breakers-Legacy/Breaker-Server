@@ -8,6 +8,7 @@ using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
 using Microsoft.Extensions.Hosting;
+using Microsoft.Extensions.Logging;
 
 namespace BreakerServer.ProtocolTests;
 
@@ -25,6 +26,8 @@ public sealed class BreakerApiFactory : WebApplicationFactory<Program>
                 ["Breaker:DiarkisSidKey"] = string.Concat(Enumerable.Repeat("03", 16)),
                 ["Breaker:DiarkisHashKey"] = string.Concat(Enumerable.Repeat("04", 16))
             }));
+
+        builder.ConfigureLogging(logging => logging.ClearProviders());
 
         builder.ConfigureTestServices(services =>
         {

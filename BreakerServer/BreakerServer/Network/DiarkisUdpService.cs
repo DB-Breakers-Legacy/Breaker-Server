@@ -1,20 +1,17 @@
 using BreakerServer.Configuration;
 using BreakerServer.Protocol.Diarkis;
 using Microsoft.Extensions.Options;
-using System;
-using System.Collections.Generic;
-using System.Linq;
 using System.Net;
 using System.Net.Sockets;
 using System.Text;
-using System.Threading;
-using System.Threading.Tasks;
 
 namespace BreakerServer.Network;
 
 public sealed class DiarkisUdpService(
     IOptions<BreakerOptions> options,
-    ILogger<DiarkisUdpService> logger) : BackgroundService
+    ILogger<DiarkisUdpService> logger,
+    bool sessionListener = false,
+    Services.SessionKeyRegistry? sessionKeys = null) : BackgroundService
 {
     private enum NetworkSendState : byte
     {
@@ -32,18 +29,17 @@ public sealed class DiarkisUdpService(
     private sealed class ClientState
     {
         public int SequenceCounter;
-        public int DnsCounter;
         public int PacketCount;
         public bool ConnectionActive;
         public bool AwaitingConnectionAck;
         public bool ConnectionEstablished;
         public bool RedirectSent;
+        public DiarkisKeySet? Keys;
         public DateTimeOffset LastSeen = DateTimeOffset.UtcNow;
 
         public void ResetForHandshake()
         {
             SequenceCounter = 0;
-            DnsCounter = 0;
             ConnectionActive = true;
             AwaitingConnectionAck = false;
             ConnectionEstablished = false;
@@ -52,31 +48,37 @@ public sealed class DiarkisUdpService(
         }
     }
 
+    private static readonly byte[] DirectoryCommand = [0x0C, 0x0C, 0, 0, 0, 1];
     private readonly BreakerOptions _options = options.Value;
     private readonly Dictionary<string, ClientState> _clients = new(StringComparer.Ordinal);
+    private readonly int _port = sessionListener ? options.Value.UdpSessionPort : options.Value.UdpPort;
     private DiarkisKeySet? _keys;
     private int _packetsSinceCleanup;
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
-        try
+        if (!sessionListener)
         {
-            _keys = SecureEnvelope.FromHex(
-                _options.DiarkisSidKey,
-                _options.DiarkisAesKey,
-                _options.DiarkisIvKey,
-                _options.DiarkisHashKey);
-        }
-        catch (Exception ex)
-        {
-            logger.LogCritical(ex, "Invalid Diarkis crypto configuration");
-            return;
+            try
+            {
+                _keys = SecureEnvelope.FromHex(
+                    _options.DiarkisSidKey,
+                    _options.DiarkisAesKey,
+                    _options.DiarkisIvKey,
+                    _options.DiarkisHashKey);
+            }
+            catch (Exception ex)
+            {
+                logger.LogCritical(ex, "Invalid Diarkis crypto configuration");
+                return;
+            }
         }
 
-        using var udp = new UdpClient(new IPEndPoint(IPAddress.Any, _options.UdpPort));
+        using var udp = new UdpClient(new IPEndPoint(IPAddress.Any, _port));
         logger.LogInformation(
-            "Diarkis UDP service listening on port {Port} with AES-CBC/HMAC-SHA256 framing",
-            _options.UdpPort);
+            "Diarkis {Listener} UDP service listening on port {Port}",
+            sessionListener ? "session" : "matching",
+            _port);
 
         while (!stoppingToken.IsCancellationRequested)
         {
@@ -124,13 +126,27 @@ public sealed class DiarkisUdpService(
         state.PacketCount++;
         CleanupStaleClients();
 
-        // The client can coalesce multiple 20-byte control frames into one UDP
-        // datagram. Parse those frames individually instead of classifying the
-        // entire datagram only by its byte count.
-        if (TrySplitControlFrames(data, out var frames))
+        if (data.Length >= 10 && data.AsSpan(2, 6).SequenceEqual(DirectoryCommand))
+        {
+            await HandleDirectoryAsync(udp, data, remote, ct);
+            return;
+        }
+
+        if (sessionListener && state.Keys is null && data.Length >= 20 &&
+            sessionKeys is not null && sessionKeys.TryResolve(data.AsSpan(4, 16), out var resolvedKeys))
+            state.Keys = resolvedKeys;
+
+        var keys = sessionListener ? state.Keys : _keys;
+        if (keys is null)
+        {
+            LogUnclassified(remote, data, "unknown or expired session");
+            return;
+        }
+
+        if (TrySplitControlFrames(data, keys, out var frames))
         {
             foreach (var frame in frames)
-                await HandleControlFrameAsync(udp, frame, remote, state, ct);
+                await HandleDatagramAsync(udp, frame, remote, state, ct);
             return;
         }
 
@@ -140,6 +156,39 @@ public sealed class DiarkisUdpService(
             return;
         }
 
+        await HandleDatagramAsync(udp, data, remote, state, ct);
+    }
+
+    private async Task HandleDirectoryAsync(UdpClient udp, byte[] data, IPEndPoint remote, CancellationToken ct)
+    {
+        var declaredLength = (data[8] << 8) | data[9];
+        if (declaredLength != data.Length - 10)
+        {
+            LogUnclassified(remote, data, "invalid directory length");
+            return;
+        }
+
+        var payload = Encoding.ASCII.GetBytes($"{_options.UdpHost}:{_options.UdpPort}");
+        var response = new byte[10 + payload.Length];
+        if (data[0] == 0 && data[1] == 0)
+        {
+            response[0] = 0x0F;
+            response[1] = 0x0F;
+        }
+        DirectoryCommand.CopyTo(response, 2);
+        response[8] = (byte)(payload.Length >> 8);
+        response[9] = (byte)payload.Length;
+        payload.CopyTo(response, 10);
+        await SendAsync(udp, response, remote, ct);
+    }
+
+    private async Task HandleDatagramAsync(
+        UdpClient udp,
+        byte[] data,
+        IPEndPoint remote,
+        ClientState state,
+        CancellationToken ct)
+    {
         var header = DatagramHeader.Parse(data);
         LogPacket(remote, data.Length, header.Sequence, header.PacketType, header.Payload.Length, state);
 
@@ -156,11 +205,12 @@ public sealed class DiarkisUdpService(
                 return;
 
             case NetworkSendState.SendEcho:
-                await HandleEchoAsync(udp, header.Sequence, header.Payload, remote, state, ct);
+                await SendAsync(udp, DiarkisPacketFactory.Echo(header.Sequence, header.Payload), remote, ct);
                 return;
 
             case NetworkSendState.SendAck:
-                await HandleAckAsync(udp, header.Sequence, remote, state, ct);
+                if (!sessionListener)
+                    await HandleAckAsync(udp, header.Sequence, remote, state, ct);
                 return;
 
             case NetworkSendState.SendEack:
@@ -173,88 +223,7 @@ public sealed class DiarkisUdpService(
                 return;
         }
 
-        // Keep the older observed size-specific paths available for packets
-        // whose packet state is not yet decoded, but never let them reset the
-        // transport state just because their length happens to match a control
-        // frame.
-        if (data.Length == 130)
-        {
-            logger.LogInformation(
-                "Diarkis transport packet from={Remote} state={State} seq={Sequence} bytes=130",
-                remote,
-                StateName(header.PacketType),
-                header.Sequence);
-            return;
-        }
-
-        if (data.Length == 26)
-        {
-            state.DnsCounter++;
-            var target = $"{_options.UdpHost}:{_options.UdpPort}";
-            await SendRawEncryptedAsync(udp, Convert.FromHexString("0F0F0C0C00000001002B"), target, remote, ct);
-
-            if (state.DnsCounter == 5)
-            {
-                var finalPrefix = Convert.FromHexString("00000C0C00000001002B");
-                var response = BuildRawEncrypted(finalPrefix, target);
-                for (var i = 0; i < 5; i++)
-                    await SendAsync(udp, response, remote, ct);
-            }
-
-            return;
-        }
-
         LogUnclassified(remote, data, $"state={StateName(header.PacketType)} seq={header.Sequence}");
-    }
-
-    private async Task HandleControlFrameAsync(
-        UdpClient udp,
-        byte[] frame,
-        IPEndPoint remote,
-        ClientState state,
-        CancellationToken ct)
-    {
-        var header = DatagramHeader.Parse(frame);
-        LogPacket(remote, frame.Length, header.Sequence, header.PacketType, header.Payload.Length, state);
-
-        switch ((NetworkSendState)header.PacketType)
-        {
-            case NetworkSendState.SendSyn:
-                state.ResetForHandshake();
-                await SendAsync(udp, DiarkisPacketFactory.Ack(header.Sequence), remote, ct);
-                logger.LogInformation("Diarkis SYN accepted from {Remote} seq={Sequence}", remote, header.Sequence);
-                break;
-
-            case NetworkSendState.SendClientKey:
-                await HandleClientKeyAsync(udp, frame, header.Sequence, remote, state, ct);
-                break;
-
-            case NetworkSendState.SendEcho:
-                await HandleEchoAsync(udp, header.Sequence, header.Payload, remote, state, ct);
-                break;
-
-            case NetworkSendState.SendAck:
-                await HandleAckAsync(udp, header.Sequence, remote, state, ct);
-                break;
-
-            case NetworkSendState.SendEack:
-                logger.LogInformation("Diarkis EACK from={Remote} seq={Sequence}", remote, header.Sequence);
-                break;
-
-            case NetworkSendState.SendFin:
-                logger.LogInformation("Diarkis FIN from={Remote} seq={Sequence}", remote, header.Sequence);
-                _clients.Remove(remote.ToString());
-                break;
-
-            default:
-                logger.LogInformation(
-                    "Diarkis control frame from={Remote} state={State} seq={Sequence} payloadBytes={PayloadBytes}",
-                    remote,
-                    StateName(header.PacketType),
-                    header.Sequence,
-                    header.Payload.Length);
-                break;
-        }
     }
 
     private async Task HandleClientKeyAsync(
@@ -265,68 +234,52 @@ public sealed class DiarkisUdpService(
         ClientState state,
         CancellationToken ct)
     {
-        if (!state.ConnectionActive)
+        if (!sessionListener && !state.ConnectionActive)
             state.ResetForHandshake();
 
         state.SequenceCounter++;
         await SendAsync(udp, DiarkisPacketFactory.Ack(incomingSequence), remote, ct);
 
         logger.LogInformation(
-            "Diarkis ClientKey from={Remote} seq={Sequence} bytes={Length} preview={Preview}",
+            "Diarkis ClientKey from={Remote} seq={Sequence} bytes={Length}",
             remote,
             incomingSequence,
-            data.Length,
-            Convert.ToHexString(data.AsSpan(0, Math.Min(data.Length, 48))));
+            data.Length);
 
-        if (!state.ConnectionEstablished)
+        var text = $"{AdvertisedPrefix()}:{remote.Port}";
+        var keys = sessionListener ? state.Keys! : _keys!;
+        if (sessionListener)
         {
-            await SendCommandAsync(udp, 0, 3, 0x0001, 0, 0x01, 0x1B,
-                $"{AdvertisedPrefix()}:{remote.Port}", remote, ct);
+            if (state.ConnectionEstablished)
+                return;
 
+            await SendCommandAsync(udp, 0, 3, 0x0001, 0, 0x01, 0x1B, text, keys, remote, ct);
             state.ConnectionEstablished = true;
-            state.AwaitingConnectionAck = true;
-            logger.LogInformation("Diarkis matching transport established for {Remote}", remote);
             return;
         }
 
-        // Retain the later observed command sequence while the exact command
-        // meanings are still being mapped. These are no longer driven by raw
-        // packet length or Echo traffic.
+        if (!state.ConnectionEstablished)
+        {
+            await SendCommandAsync(udp, 0, 3, 0x0001, 0, 0x01, 0x1B, text, keys, remote, ct);
+            state.ConnectionEstablished = true;
+            state.AwaitingConnectionAck = true;
+            return;
+        }
+
         if (state.SequenceCounter == 3)
         {
             await SendCommandAsync(udp, 3, 3, 0x012F, 1, 0xFF, 0x2D,
-                $"{_options.UdpHost}:{_options.UdpPort}", remote, ct);
+                $"{_options.UdpHost}:{_options.UdpPort}", keys, remote, ct);
         }
         else if (state.SequenceCounter == 4)
         {
-            await SendCommandAsync(udp, 4, 3, 0x0131, 1, 0x01, 0x01, string.Empty, remote, ct);
+            await SendCommandAsync(udp, 4, 3, 0x0131, 1, 0x01, 0x01, string.Empty, keys, remote, ct);
         }
         else if (state.SequenceCounter > 4)
         {
             var seq = unchecked((byte)(state.SequenceCounter & 0xFF));
-            await SendCommandAsync(udp, seq, 3, 0x0001, 0, 0x01, 0x1B,
-                $"{AdvertisedPrefix()}:{remote.Port}", remote, ct);
+            await SendCommandAsync(udp, seq, 3, 0x0001, 0, 0x01, 0x1B, text, keys, remote, ct);
         }
-    }
-
-    private async Task HandleEchoAsync(
-        UdpClient udp,
-        int sequence,
-        byte[] payload,
-        IPEndPoint remote,
-        ClientState state,
-        CancellationToken ct)
-    {
-        // Diarkis Echo carries a payload that the client later uses to measure
-        // the echo round trip. Return the same payload with the same Echo state;
-        // do not reset the ClientKey/connection state.
-        await SendAsync(udp, DiarkisPacketFactory.Echo(sequence, payload), remote, ct);
-        logger.LogInformation(
-            "Diarkis Echo reply to={Remote} seq={Sequence} payloadBytes={PayloadBytes} established={Established}",
-            remote,
-            sequence,
-            payload.Length,
-            state.ConnectionEstablished);
     }
 
     private async Task HandleAckAsync(
@@ -336,35 +289,22 @@ public sealed class DiarkisUdpService(
         ClientState state,
         CancellationToken ct)
     {
-        logger.LogInformation(
-            "Diarkis ACK from={Remote} seq={Sequence} waitingConnectionAck={Waiting} redirectSent={RedirectSent}",
-            remote,
-            sequence,
-            state.AwaitingConnectionAck,
-            state.RedirectSent);
-
-        // The first ACK after the initial matching transport reply acknowledges
-        // sequence 0. Only that ACK advances the old redirect stage. ACKs for
-        // the redirect packets themselves (seq 1/2) must not restart it.
         if (!state.AwaitingConnectionAck || state.RedirectSent || sequence != 0)
             return;
 
         state.AwaitingConnectionAck = false;
         state.RedirectSent = true;
-
+        var keys = _keys!;
         await SendCommandAsync(udp, 1, 3, 0x012F, 1, 0xFF, 0x2F,
-            $"6.{_options.UdpHost}:{_options.UdpSessionPort}", remote, ct);
+            $"6.{_options.UdpHost}:{_options.UdpSessionPort}", keys, remote, ct);
         await SendCommandAsync(udp, 2, 3, 0x012F, 1, 0xFF, 0x2D,
-            $"{_options.UdpHost}:{_options.UdpSessionPort}", remote, ct);
-
-        logger.LogInformation(
-            "Diarkis matching redirect sent {Remote} -> {Host}:{Port}",
-            remote,
-            _options.UdpHost,
-            _options.UdpSessionPort);
+            $"{_options.UdpHost}:{_options.UdpSessionPort}", keys, remote, ct);
     }
 
-    private bool TrySplitControlFrames(byte[] data, out List<byte[]> frames)
+    private static bool TrySplitControlFrames(
+        byte[] data,
+        DiarkisKeySet keys,
+        out List<byte[]> frames)
     {
         frames = [];
         if (data.Length < 20 || data.Length % 20 != 0)
@@ -373,17 +313,9 @@ public sealed class DiarkisUdpService(
         for (var offset = 0; offset < data.Length; offset += 20)
         {
             var frame = data.AsSpan(offset, 20);
-            var packetType = frame[3];
-            if (packetType > (byte)NetworkSendState.SendFin)
-            {
-                frames.Clear();
-                return false;
-            }
-
-            // Current client control frames are a 4-byte datagram header plus
-            // the configured 16-byte SID. Requiring that shape prevents an
-            // unrelated 40/60-byte payload from being split accidentally.
-            if (_keys!.Sid.Length != 16 || !frame[4..20].SequenceEqual(_keys.Sid))
+            if (frame[3] > (byte)NetworkSendState.SendFin ||
+                keys.Sid.Length != 16 ||
+                !frame[4..20].SequenceEqual(keys.Sid))
             {
                 frames.Clear();
                 return false;
@@ -440,7 +372,7 @@ public sealed class DiarkisUdpService(
             _clients.Remove(pair.Key);
     }
 
-    private Task SendCommandAsync(
+    private static Task SendCommandAsync(
         UdpClient udp,
         byte sequence,
         byte packetType,
@@ -449,6 +381,7 @@ public sealed class DiarkisUdpService(
         byte status,
         uint clearPayloadSize,
         string text,
+        DiarkisKeySet keys,
         IPEndPoint remote,
         CancellationToken ct)
     {
@@ -460,20 +393,9 @@ public sealed class DiarkisUdpService(
             status,
             clearPayloadSize,
             Encoding.UTF8.GetBytes(text),
-            _keys!);
+            keys);
         return SendAsync(udp, packet, remote, ct);
     }
-
-    private Task SendRawEncryptedAsync(
-        UdpClient udp,
-        byte[] prefix,
-        string text,
-        IPEndPoint remote,
-        CancellationToken ct) =>
-        SendAsync(udp, BuildRawEncrypted(prefix, text), remote, ct);
-
-    private byte[] BuildRawEncrypted(byte[] prefix, string text) =>
-        DiarkisPacketFactory.Combine(prefix, SecureEnvelope.Encrypt(Encoding.UTF8.GetBytes(text), _keys!));
 
     private string AdvertisedPrefix()
     {
