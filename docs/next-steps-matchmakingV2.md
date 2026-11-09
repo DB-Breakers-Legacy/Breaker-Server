@@ -16,7 +16,24 @@ This is a synthetic implementation baseline, not proof of native-client
 interoperability. No patched game client has been run and no long multi-peer soak
 has been performed.
 
-## Priority 1 - Validate the real client safely
+## Priority 1 - Build an eight-socket bot harness, then validate the real client
+
+Add an integration harness in `ProtocolTests` that runs eight protocol-level bots
+in one process. Each bot gets its own UDP socket, SID, keys, user ID, and sequence
+space; no players, Steam, rendering, or extra VMs are required.
+
+The bots should exercise SYN/init, CSMS create/search/update/complete, connection
+attach, member IDs, mesh, P2P completion, relay, leave, and requeue through the
+real encrypted UDP path. Report failures with the bot number and exact stage.
+Include valid, fragmented, duplicate, disconnecting, slow, and non-member
+profiles, plus a capture/replay mode that fills the other seven slots with bots.
+
+Keep production matching at eight players. A separate test-only
+`RequiredPlayers` override may allow one- or two-player smoke runs, but must not
+weaken the eight-player acceptance test. Use repeated assembly/disconnect/requeue
+runs to check for stale sessions, fragments, and retransmission state.
+
+### Native validation after the harness
 
 1. Use a disposable isolated guest and dedicated test account.
 2. Enforce an external firewall allowlist for the private backend and approved
@@ -31,7 +48,8 @@ has been performed.
    commit it with a focused regression test and a short research-log update.
 
 Done when the patched client completes that entire sequence using only private
-infrastructure and the capture contains no unintended destinations.
+infrastructure and the capture contains no unintended destinations. One or two
+real clients should then be enough for final compatibility checks.
 
 ## Priority 2 - Protocol behavior confirmed from supplied captures
 
@@ -91,6 +109,9 @@ behavior changes.
 - [x] Connection rooms and P2P relay implemented.
 - [x] HTTP lifecycle replay implemented.
 - [x] Targeted native parser metadata corrected.
+- [ ] Eight-socket bot harness completes the full UDP lifecycle.
+- [ ] Test-only match-size override supports one- or two-player smoke runs while
+      the production default remains eight.
 - [ ] Native client completes the full flow in an isolated captured run.
 - [x] Queue responses confirmed.
 - [x] Invitation spelling resolved.

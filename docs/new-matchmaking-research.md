@@ -327,6 +327,14 @@ implementation as proof of client compatibility:
 - use endpoint-specific response evidence for the two queue HTTP calls rather
   than inventing response shapes.
 
+Before native validation, add an eight-socket protocol bot harness to
+`ProtocolTests`. Drive the complete match lifecycle through the real encrypted
+UDP path with independent SIDs, keys, user IDs, and sequence spaces. Include
+valid, fragmented, duplicate, disconnecting, slow, and non-member profiles, plus
+capture/replay with seven bot slots. A test-only `RequiredPlayers` override may
+be used for one- or two-player smoke runs, but production and acceptance testing
+must retain eight-player behavior.
+
 Replay the harvested HTTP sequence before running the patched client in the
 isolated guest. Compare live HTTP/UDP order with golden evidence and record every
 unexplained difference. No official or unintended external destination is
