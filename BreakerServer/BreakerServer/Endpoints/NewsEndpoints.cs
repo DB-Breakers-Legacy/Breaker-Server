@@ -29,7 +29,15 @@ public static class NewsEndpoints
             throw new InvalidOperationException("The bundled news image could not be found.");
         });
 
-        var api = app.MapGroup("/dbtb-prd/{title}/api");
+        MapApi(app, "/dbtb-prd/{title}/api");
+        MapApi(app, "/dbtb-prd/{prefix}/{title}/api");
+
+        return app;
+    }
+
+    private static void MapApi(IEndpointRouteBuilder app, string prefix)
+    {
+        var api = app.MapGroup(prefix);
 
         api.MapPost("/news/get_3d_model_news", (
             ApiResponseService responses,
@@ -57,8 +65,6 @@ public static class NewsEndpoints
                 0,
                 Array.Empty<object?>()
             }));
-
-        return app;
     }
 
     private static (string AvailableAt, string ExpireAt) ActiveWindow()

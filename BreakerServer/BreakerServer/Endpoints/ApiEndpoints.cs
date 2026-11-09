@@ -22,7 +22,13 @@ public static class ApiEndpoints
 
     private static void MapGame(IEndpointRouteBuilder app)
     {
-        var api = app.MapGroup("/dbtb-prd/{title}/api");
+        MapGame(app, "/dbtb-prd/{title}/api");
+        MapGame(app, "/dbtb-prd/{prefix}/{title}/api");
+    }
+
+    private static void MapGame(IEndpointRouteBuilder app, string prefix)
+    {
+        var api = app.MapGroup(prefix);
         void Static(string path, string name) =>
             api.MapPost(path, (ApiResponseService responses, ResponseCatalog catalog) =>
                 responses.Respond(catalog.Get(name)));
@@ -49,8 +55,51 @@ public static class ApiEndpoints
         Static("/battle/pre_matching_connection", "preMatchingConnection");
         Static("/battle/save_matching_cache", "saveMatchingCache");
         Static("/player/upload_ghost_player", "uploadGhostPlayer");
-        Static("/battle/consume_priority_point", "consumePriorityPoint");
-        Static("/battle/get_battle_member_result_list", "getBattleMemberResultList");
+
+        api.MapPost("/battle/consume_priority_point", async (
+            HttpRequest request,
+            ApiResponseService responses,
+            ResponseCatalog catalog,
+            MatchmakingCoordinator coordinator,
+            RequestIdentityResolver identity,
+            CancellationToken ct) =>
+        {
+            var body = await MessagePackHttp.ReadAsync(request, ct);
+            coordinator.RequireBattle(identity.ResolveUserId(body).ToString());
+            return responses.Respond(catalog.Get("consumePriorityPoint"));
+        });
+
+        api.MapPost("/battle/get_battle_member_result_list", async (
+            HttpRequest request,
+            ApiResponseService responses,
+            ResponseCatalog catalog,
+            MatchmakingCoordinator coordinator,
+            RequestIdentityResolver identity,
+            CancellationToken ct) =>
+        {
+            var body = await MessagePackHttp.ReadAsync(request, ct);
+            coordinator.RequireBattle(identity.ResolveUserId(body).ToString());
+            return responses.Respond(catalog.Get("getBattleMemberResultList"));
+        });
+
+        api.MapPost("/adjustment_data_manage/get_version", (ApiResponseService responses) =>
+            responses.Respond(new object?[] { 0, 2 }));
+
+        api.MapPost("/season/get_selectable_stage", (ApiResponseService responses) =>
+            responses.Respond(new object?[]
+            {
+                0,
+                new object?[]
+                {
+                    new object?[] { "1000", "ハイランドリバー" },
+                    new object?[] { "1100", "スノーマウンテン" },
+                    new object?[] { "1110", "ロックフィールド" },
+                    new object?[] { "1200", "ウォーターフロント" },
+                    new object?[] { "1300", "グリーンコースト" },
+                    new object?[] { "1400", "デンジャーグラウンド" },
+                    new object?[] { "1500", "ダークフューチャー" }
+                }
+            }));
 
         api.MapPost("/user/create_user_info", async (
             HttpRequest request,
@@ -221,21 +270,25 @@ public static class ApiEndpoints
 
         api.MapPost("/battle/get_diarkis_matching_server_info", (
             ApiResponseService responses,
+            SessionKeyRegistry registry,
             IOptions<BreakerOptions> options) =>
-            responses.Respond(new object?[]
+        {
+            var keys = registry.Create();
+            return responses.Respond(new object?[]
             {
                 0,
                 new object?[]
                 {
                     options.Value.UdpHost,
                     options.Value.UdpPort,
-                    options.Value.DiarkisIvKey.ToLowerInvariant(),
-                    options.Value.DiarkisAesKey.ToLowerInvariant(),
-                    options.Value.DiarkisSidKey.ToLowerInvariant(),
-                    options.Value.DiarkisHashKey.ToLowerInvariant()
+                    keys.Sid,
+                    keys.Aes,
+                    keys.Iv,
+                    keys.Mac
                 },
                 new object?[] { 1, 1 }
-            }));
+            });
+        });
 
         api.MapPost("/message/get_message_list", async (
             HttpRequest request,
@@ -308,19 +361,24 @@ public static class ApiEndpoints
             return responses.Respond(new object?[] { 0, result, 696969 });
         });
 
-        api.MapPost("/battle/get_connection_server_info", (
+        api.MapPost("/battle/get_connection_server_info", async (
+            HttpRequest request,
             ApiResponseService responses,
             SessionKeyRegistry registry,
-            IOptions<BreakerOptions> options) =>
+            MatchmakingCoordinator coordinator,
+            RequestIdentityResolver identity,
+            CancellationToken ct) =>
         {
+            var body = await MessagePackHttp.ReadAsync(request, ct);
+            var binding = coordinator.GetConnectionBinding(identity.ResolveUserId(body).ToString());
             var keys = registry.Create();
             return responses.Respond(new object?[]
             {
                 0,
                 new object?[]
                 {
-                    options.Value.UdpHost,
-                    options.Value.UdpSessionPort,
+                    binding.Host,
+                    binding.Port,
                     keys.Sid,
                     keys.Aes,
                     keys.Iv,
@@ -332,13 +390,16 @@ public static class ApiEndpoints
         api.MapPost("/battle/start", async (
             HttpRequest request,
             ApiResponseService responses,
+            MatchmakingCoordinator coordinator,
+            RequestIdentityResolver identity,
             CancellationToken ct) =>
         {
             var body = ObjectTree.List(await MessagePackHttp.ReadAsync(request, ct), 2);
+            var userId = identity.ResolveUserId(body).ToString();
             var args = ObjectTree.List(body[1], 2);
             var roster = ObjectTree.List(args[1], 1);
             var leader = ObjectTree.Text(roster[0]);
-            var battleId = $"{leader}_{DateTimeOffset.Now:yyyyMMddHHmmss}";
+            var battleId = coordinator.StartBattle(userId, leader);
 
             return responses.Respond(new object?[]
             {
@@ -349,8 +410,15 @@ public static class ApiEndpoints
             });
         });
 
-        api.MapPost("/battle/result", (ApiResponseService responses) =>
+        api.MapPost("/battle/result", async (
+            HttpRequest request,
+            ApiResponseService responses,
+            MatchmakingCoordinator coordinator,
+            RequestIdentityResolver identity,
+            CancellationToken ct) =>
         {
+            var body = await MessagePackHttp.ReadAsync(request, ct);
+            coordinator.CompleteBattle(identity.ResolveUserId(body).ToString());
             object?[] pass =
             [
                 9,
