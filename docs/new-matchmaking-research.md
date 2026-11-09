@@ -288,7 +288,7 @@ Verification:
 - `get_connection_server_info` returns the assembled battle's binding rather
   than unrelated global state.
 
-### Milestone 4 - Implement connection handoff and P2P
+### Milestone 4 - Implement connection handoff and P2P (complete for synthetic connection rooms and relay)
 
 Support redirect and no-redirect variants, 22000-series attach/report flows,
 23000-series responses, 22100-series pushes, room commands 11, 14, 101, 102,
@@ -473,6 +473,39 @@ This completes Milestone 3 for synthetic match assembly. Connection-room
 commands, P2P, and native-client interoperability remain unverified. No live game
 test was run.
 
+### Milestone 4 result - synthetic connection rooms and P2P relay
+
+Implemented `Services/ConnectionRoomCoordinator.cs` and integrated it with the
+session listener:
+
+- Handles 22000/22001/22002/22004 attach, practice, report, and leave flows,
+  23000-series responses, and 22100/22101/22104/22105 pushes.
+- Implements room commands 11, 14, 101, 102, 103, and 115, including the 52-char
+  Diarkis room ID, member-list duplicate-entry quirk, member-left notifications,
+  and missing-room rejection.
+- Builds cmd-127 mesh records from each member's public/LAN endpoints and counts
+  cmd-301 P2P completion reports per member.
+- Relays cmds 19, 24, and 104 with validated room membership and recipient IDs.
+  Game payloads remain opaque; cmd-104 preserves its reliable flag, while profile
+  relays use unreliable datagrams without retransmission.
+- Retains the redirect/no-redirect and SID/key-carryover behavior verified in
+  Milestone 1.
+
+Verification:
+
+- Release build passed with zero warnings and zero errors.
+- All 66 tests passed. Eight members attach to one connection room, exchange
+  member IDs and mesh data, complete P2P reports, relay to valid recipients, and
+  dissolve with shrinking rosters and final missing-room rejection.
+- Non-members cannot inject room traffic. Live UDP connection attach emits the
+  expected CSMS response/push sequence through the encrypted transport.
+- `dotnet format` on `ProtocolTests.csproj` passed. The server-only check still
+  reports only the four unrelated baseline import-order findings.
+
+This completes Milestone 4 for synthetic connection rooms and relay. It does not
+prove native-client interoperability or a long multi-peer soak. No live game test
+was run.
+
 ## Findings log
 
 ### 2026-11-08 - New baseline and initial executable/header correlation
@@ -536,6 +569,16 @@ test was run.
   with the authenticated connection handout.
 - Expanded the managed suite to 64 passing tests; no native game test was run.
 
+### 2026-11-08 - Milestone 4 synthetic connection and P2P completed
+
+- Added connection-room attach/leave, member and mesh commands, P2P completion
+  bookkeeping, and membership-checked opaque relay.
+- Eight synthetic members complete the connection lifecycle with shrinking
+  rosters and missing-room rejection.
+- Live UDP connection attach and non-member injection rejection are covered.
+- Expanded the managed suite to 66 passing tests; no native game or long soak
+  test was run.
+
 ## Next update checklist
 
 - [x] Record the build/test/format result on merged PR #5; build and tests pass,
@@ -547,3 +590,4 @@ test was run.
 - [x] Complete Milestone 2 CSMS and fragmentation tests.
 - [x] Record the first isolated eight-client result without claiming success
       before the captured exit criteria pass.
+- [x] Complete Milestone 4 synthetic connection-room and P2P tests.

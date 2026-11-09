@@ -14,7 +14,8 @@ public sealed class DiarkisUdpService(
     bool sessionListener = false,
     Services.SessionKeyRegistry? sessionKeys = null,
     TimeSpan? retransmitInterval = null,
-    Services.MatchmakingCoordinator? coordinator = null) : BackgroundService
+    Services.MatchmakingCoordinator? coordinator = null,
+    Services.ConnectionRoomCoordinator? connectionRooms = null) : BackgroundService
 {
     private const int MaxFragmentChunkBytes = 1200;
     private const int MaxRememberedDatagrams = 256;
@@ -304,8 +305,43 @@ public sealed class DiarkisUdpService(
                 }
                 return;
             default:
-                logger.LogInformation("Unhandled Diarkis command {Command} from {Remote}", envelope.Command, state.Remote);
+                if (sessionListener && connectionRooms is not null)
+                    await HandleSessionRoomAsync(udp, state, envelope, plaintext, ct);
+                else
+                    logger.LogInformation("Unhandled Diarkis command {Command} from {Remote}", envelope.Command, state.Remote);
                 return;
+        }
+    }
+
+    private async Task HandleSessionRoomAsync(
+        UdpClient udp,
+        ClientState state,
+        CommandEnvelope envelope,
+        byte[] plaintext,
+        CancellationToken ct)
+    {
+        try
+        {
+            var messages = connectionRooms!.HandleRoomCommand(state.UserId ?? string.Empty, envelope);
+            foreach (var message in messages)
+            {
+                foreach (var target in _sessions.Values.Where(x => x.UserId == message.TargetUserId))
+                {
+                    var body = CommandEnvelopeCodec.Build(
+                        message.Command,
+                        SecureEnvelope.Encrypt(message.Plaintext, target.Keys),
+                        message.Version,
+                        message.Status);
+                    if (message.Reliable)
+                        await SendBodyAsync(udp, target, body, ct);
+                    else
+                        await SendUnreliableBodyAsync(udp, target, body, ct);
+                }
+            }
+        }
+        catch (InvalidDataException ex)
+        {
+            logger.LogWarning(ex, "Invalid session-room command {Command} from {Remote}", envelope.Command, state.Remote);
         }
     }
 
@@ -321,9 +357,16 @@ public sealed class DiarkisUdpService(
             var packet = CsmsCodec.Parse(plaintext, fromClient: true);
             state.UserId = packet.UserId;
             state.Platform = packet.Platform;
-            if (command == 0x2EE0 && coordinator is not null)
+            IReadOnlyList<Services.OutgoingCsms>? messages = command switch
             {
-                var messages = coordinator.Handle(packet);
+                0x2EE0 when coordinator is not null => coordinator.Handle(packet),
+                0x55F0 when connectionRooms is not null => connectionRooms.Handle(packet),
+                _ => null
+            };
+            if (command == 0x55F0 && connectionRooms is not null)
+                connectionRooms.SetEndpoints(packet.UserId, state.ClientPublicAddress, state.ClientLanAddress);
+            if (messages is not null)
+            {
                 foreach (var message in messages)
                 {
                     var response = CsmsCodec.BuildResponse(
@@ -433,6 +476,19 @@ public sealed class DiarkisUdpService(
         state.Unacked[sequence] = new PendingDatagram(body, DateTimeOffset.UtcNow);
         await SendAsync(udp,
             DiarkisPacketFactory.Combine(DatagramHeader.Pack(sequence, (byte)DiarkisDatagramType.Reliable), body),
+            state.Remote,
+            ct);
+    }
+
+    private async Task SendUnreliableBodyAsync(UdpClient udp, ClientState state, byte[] body, CancellationToken ct)
+    {
+        if (body.Length > MaxFragmentChunkBytes)
+            throw new InvalidDataException("Unreliable Diarkis payload exceeds the datagram limit.");
+
+        var sequence = state.NextSequence;
+        state.NextSequence = (state.NextSequence + 1) & 0xFFFFFF;
+        await SendAsync(udp,
+            DiarkisPacketFactory.Combine(DatagramHeader.Pack(sequence, (byte)DiarkisDatagramType.Unreliable), body),
             state.Remote,
             ct);
     }

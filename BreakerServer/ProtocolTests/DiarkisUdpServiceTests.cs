@@ -362,6 +362,67 @@ public sealed class DiarkisUdpServiceTests
     }
 
     [Fact]
+    public async Task ConnectionAttachEmitsCsmsSequenceOverUdp()
+    {
+        var matchmaking = new MatchmakingCoordinator(Options.Create(new BreakerOptions
+        {
+            UdpHost = "127.0.0.1",
+            UdpSessionPort = 7102
+        }));
+        string connectionId = string.Empty;
+        for (var index = 1; index <= 8; index++)
+        {
+            var userId = $"10000000000000000{index}";
+            var created = matchmaking.Handle(new CsmsPacket(
+                userId, 3, 12000, "025348", "{\"gameRule\":0}", false));
+            var roomId = System.Text.Json.JsonDocument.Parse(created[1].Data)
+                .RootElement.GetProperty("roomId").GetString()!;
+            matchmaking.Handle(new CsmsPacket(
+                userId, 3, 12017, "025348",
+                System.Text.Json.JsonSerializer.Serialize(new { roomId }), false));
+        }
+        connectionId = matchmaking.GetConnectionBinding("100000000000000001").ConnectionRoomId;
+
+        var rooms = new ConnectionRoomCoordinator(matchmaking);
+        var registry = new SessionKeyRegistry();
+        var port = FreeUdpPort();
+        var service = CreateService(
+            port,
+            registry,
+            sessionListener: true,
+            coordinator: matchmaking,
+            connectionRooms: rooms);
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(8));
+        using var client = new FakeClient(port, registry.Create(), timeout.Token);
+        await service.StartAsync(timeout.Token);
+        try
+        {
+            await client.SynAsync();
+            await client.InitAsync();
+            await client.ReceiveAckAsync(0);
+            await client.ReceiveCommandAsync(0x0001);
+            await client.AckServerAsync(0);
+
+            var request = CsmsCodec.BuildRequest(
+                "100000000000000001", 3, 22001,
+                System.Text.Json.JsonSerializer.Serialize(new { connectionRoomId = connectionId }));
+            await client.SendCommandAsync(0x55F0, request, version: 1);
+            await client.ReceiveAckAsync(1);
+            foreach (var expected in new[] { 23001U, 22100U, 22104U, 22101U })
+            {
+                var message = await client.ReceiveCommandAsync(0x55F0);
+                Assert.Equal(expected, CsmsCodec.Parse(message.Plaintext, fromClient: false).SubId);
+            }
+            await client.ReceiveCommandAsync(0x0002);
+            await client.AckServerAsync(1, 2, 3, 4, 5);
+        }
+        finally
+        {
+            await service.StopAsync(CancellationToken.None);
+        }
+    }
+
+    [Fact]
     public async Task DirectoryReplyIsClearTextAndFlipsTheFlag()
     {
         var port = FreeUdpPort();
@@ -404,7 +465,8 @@ public sealed class DiarkisUdpServiceTests
         SessionKeyRegistry registry,
         TimeSpan? retransmitInterval = null,
         bool sessionListener = false,
-        MatchmakingCoordinator? coordinator = null) =>
+        MatchmakingCoordinator? coordinator = null,
+        ConnectionRoomCoordinator? connectionRooms = null) =>
         new(
             Options.Create(new BreakerOptions
             {
@@ -417,7 +479,8 @@ public sealed class DiarkisUdpServiceTests
             sessionListener,
             registry,
             retransmitInterval,
-            coordinator);
+            coordinator,
+            connectionRooms);
 
     private static byte[] AddressPayload(string host, int port)
     {
