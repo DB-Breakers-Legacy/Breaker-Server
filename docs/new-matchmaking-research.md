@@ -169,6 +169,18 @@ must remain open: the executable string is **`isInvited`**, while the sanitized
 capture table currently says **`isInvite`**. Check the original capture and build
 before implementing this field; do not silently choose either spelling.
 
+### CSMS request serialization
+
+The client CSMS writer at `0x1405297B0` emits a five-entry MessagePack map in
+this order: `title_cd`, `platform`, `user_id`, `id`, `data`. The title, user ID,
+and data values are strings, while platform is numeric. In particular, `user_id`
+is a string matching the 18-digit header UID, not an integer.
+
+The managed codec also preserves the captured integer encodings: request IDs use
+`CD` for the observed 16-bit values, and response/push IDs use `D2`. MessagePack-C#
+would encode an unsigned 32-bit value as `CE`, so using `uint` directly is not
+wire-compatible with the captured response format.
+
 ### Still unknown from native code
 
 - response and notification field reads, validation, and callback targets;
@@ -240,7 +252,7 @@ Verification:
 - no production command handler relies on packet length as a substitute for
   magic/type parsing.
 
-### Milestone 2 - Implement and verify CSMS framing
+### Milestone 2 - Implement and verify CSMS framing (complete for framing and synthetic fragmentation)
 
 Implement command 12000 and 22000 client requests, server responses, and server
 pushes. Include MessagePack envelopes, double-encoded JSON `data`, nested JSON
@@ -399,6 +411,35 @@ This completes the synthetic Milestone 1 exit criteria. CSMS, queue/room state,
 and the queue-time HTTP response shapes remain later milestones. No native game
 or live-client interoperability test was run.
 
+### Milestone 2 result - CSMS framing and synthetic fragmentation
+
+Implemented `Protocol/Diarkis/CsmsCodec.cs` with one strict codec for client
+requests, server responses, and server pushes:
+
+- Handles the 54-byte header, reserved bytes, 18-digit string UID, binary
+  response platform, exact MessagePack lengths, and push-length prefix.
+- Serializes request maps in captured order with string `user_id`, numeric
+  platform, JSON-string `data`, `CD` request IDs, and `D2` response/push IDs.
+- Validates header/map ID agreement, map shape, JSON objects, lengths, and
+  request-plus-1000 response sub-ID mapping.
+- Parses commands 12000 and 22000 on the live decrypted UDP path. A valid CSMS
+  connection-room request is required before the session-probe redirect; invalid
+  payloads are rejected without dropping the listener.
+
+Verification:
+
+- Release build passed with zero warnings and zero errors.
+- All 59 tests passed, including exact request/response layouts, malformed IDs
+  and lengths, a 1502-byte ticket create split into two fragments, a final
+  roster push split into three fragments, and a fragmented CSMS connection-room
+  request driving the real redirect path.
+- `dotnet format` on `ProtocolTests.csproj` passed. The server-only check still
+  reports only the four unrelated baseline import-order findings.
+
+This completes Milestone 2 for framing and synthetic fragmentation. It does not
+implement room semantics, encode the unresolved join-invitation field, or claim
+native-client interoperability. No live game test was run.
+
 ## Findings log
 
 ### 2026-11-08 - New baseline and initial executable/header correlation
@@ -442,6 +483,16 @@ or live-client interoperability test was run.
 - Preserved the four unrelated baseline formatting findings and documented that
   no native live-client test has been performed.
 
+### 2026-11-08 - Milestone 2 CSMS framing completed
+
+- Confirmed from the executable that CSMS request `user_id` is a string and
+  preserved captured `CD`/`D2` ID encodings rather than MessagePack-C#'s default
+  unsigned `CE` encoding.
+- Added strict request, response, and push codecs plus live CSMS validation.
+- Added golden two-fragment ticket-create and three-fragment roster-push tests.
+- Expanded the managed suite to 59 passing tests without changing room behavior
+  or claiming live-client interoperability.
+
 ## Next update checklist
 
 - [x] Record the build/test/format result on merged PR #5; build and tests pass,
@@ -450,6 +501,6 @@ or live-client interoperability test was run.
 - [ ] Confirm the remaining request serializer candidates and command metadata.
 - [ ] Resolve the join-field spelling disagreement with capture evidence.
 - [x] Complete Milestone 1 golden transport tests.
-- [ ] Complete Milestone 2 CSMS and fragmentation tests.
+- [x] Complete Milestone 2 CSMS and fragmentation tests.
 - [ ] Record the first isolated eight-client result without claiming success
       before the captured exit criteria pass.

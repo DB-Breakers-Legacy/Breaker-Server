@@ -286,15 +286,43 @@ public sealed class DiarkisUdpService(
                 return;
             case 0x0131:
                 return;
-            case 0x55F0 when sessionListener:
-                var redirect = DiarkisPacketFactory.Combine(
-                    [0xBE, 0xEF, 0xFE, 0xED],
-                    Encoding.ASCII.GetBytes($"{_options.UdpHost}:{_options.UdpPort}"));
-                await SendCommandAsync(udp, state, 0x0002, 0, 0xFF, redirect, ct);
+            case 0x2EE0:
+                ValidateCsms(state, envelope.Command, plaintext);
+                return;
+            case 0x55F0:
+                if (!ValidateCsms(state, envelope.Command, plaintext))
+                    return;
+                if (sessionListener)
+                {
+                    var redirect = DiarkisPacketFactory.Combine(
+                        [0xBE, 0xEF, 0xFE, 0xED],
+                        Encoding.ASCII.GetBytes($"{_options.UdpHost}:{_options.UdpPort}"));
+                    await SendCommandAsync(udp, state, 0x0002, 0, 0xFF, redirect, ct);
+                }
                 return;
             default:
                 logger.LogInformation("Unhandled Diarkis command {Command} from {Remote}", envelope.Command, state.Remote);
                 return;
+        }
+    }
+
+    private bool ValidateCsms(ClientState state, ushort command, ReadOnlySpan<byte> plaintext)
+    {
+        try
+        {
+            var packet = CsmsCodec.Parse(plaintext, fromClient: true);
+            logger.LogInformation(
+                "Validated CSMS command {Command} sub-ID {SubId} for user {UserId} on {Listener} listener",
+                command,
+                packet.SubId,
+                packet.UserId,
+                sessionListener ? "session" : "matching");
+            return true;
+        }
+        catch (InvalidDataException ex)
+        {
+            logger.LogWarning(ex, "Invalid CSMS command {Command} from {Remote}", command, state.Remote);
+            return false;
         }
     }
 

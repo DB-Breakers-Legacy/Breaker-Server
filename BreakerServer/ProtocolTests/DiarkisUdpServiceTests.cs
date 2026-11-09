@@ -230,7 +230,9 @@ public sealed class DiarkisUdpServiceTests
             Assert.Equal(0, reply.Sequence);
             await client.AckServerAsync(0);
 
-            await client.SendCommandAsync(0x55F0, new byte[4], version: 1);
+            var request = CsmsCodec.BuildRequest(
+                "100000000000000001", 3, 22001, "{\"connectionRoomId\":\"ROOM\"}");
+            await client.SendCommandAsync(0x55F0, request, version: 1);
             await client.ReceiveAckAsync(1);
             var redirect = await client.ReceiveCommandAsync(0x0002);
             Assert.Equal(1, redirect.Sequence);
@@ -262,6 +264,41 @@ public sealed class DiarkisUdpServiceTests
             {
                 await realService.StopAsync(CancellationToken.None);
             }
+        }
+        finally
+        {
+            await service.StopAsync(CancellationToken.None);
+        }
+    }
+
+    [Fact]
+    public async Task FragmentedConnectionRoomCsmsTriggersRedirect()
+    {
+        var registry = new SessionKeyRegistry();
+        var port = FreeUdpPort();
+        var service = CreateService(port, registry, sessionListener: true);
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(8));
+        using var client = new FakeClient(port, registry.Create(), timeout.Token);
+        await service.StartAsync(timeout.Token);
+        try
+        {
+            await client.SynAsync();
+            await client.InitAsync();
+            await client.ReceiveAckAsync(0);
+            await client.ReceiveCommandAsync(0x0001);
+            await client.AckServerAsync(0);
+
+            var request = CsmsCodec.BuildRequest(
+                "100000000000000001",
+                3,
+                22001,
+                "{\"connectionRoomId\":\"ROOM\"}");
+            await client.SendFragmentedCsmsAsync(request);
+            await client.ReceiveAckAsync(1);
+            await client.ReceiveAckAsync(2);
+            var redirect = await client.ReceiveCommandAsync(0x0002);
+            Assert.Equal(1, redirect.Sequence);
+            await client.AckServerAsync(1);
         }
         finally
         {
@@ -447,6 +484,15 @@ public sealed class DiarkisUdpServiceTests
             return SendFragmentsAsync(fragments);
         }
 
+        public Task SendFragmentedCsmsAsync(byte[] request)
+        {
+            var inner = CommandEnvelopeCodec.Build(
+                0x55F0,
+                DiarkisPacketFactory.Combine(Keys.Sid, SecureEnvelope.Encrypt(request, Keys)),
+                version: 1);
+            return SendFragmentsAsync(Fragmentation.Split(8, inner, 100), 0x55F0);
+        }
+
         public async Task SendCommandAsync(
             ushort command,
             byte[] plaintext,
@@ -523,10 +569,10 @@ public sealed class DiarkisUdpServiceTests
                 await _client.ReceiveAsync(attempt.Token));
         }
 
-        private async Task SendFragmentsAsync(IReadOnlyList<byte[]> fragments)
+        private async Task SendFragmentsAsync(IReadOnlyList<byte[]> fragments, ushort command = 0x0001)
         {
             foreach (var fragment in fragments)
-                await SendReliableAsync(Fragmentation.WrapClientFragment(0x0001, Keys.Sid, fragment));
+                await SendReliableAsync(Fragmentation.WrapClientFragment(command, Keys.Sid, fragment));
         }
 
         private Task SendReliableAsync(byte[] payload)
