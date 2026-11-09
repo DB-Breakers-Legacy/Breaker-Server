@@ -114,11 +114,16 @@ four function entries. Values such as `0x14143B690`, `0x14140A030`, and
 | `ProtocolRequestCasualCreateConnectionRoom` | `0x1411FF6D0` | 1 | `0x14078B6C0` | Shared candidate; decompile next |
 | `ProtocolRequestCasualJoinConnectionRoom` | `0x1411FF718` | 1 | `0x14078B6C0` | Shared candidate; decompile next |
 | `ProtocolRequestCasualReportBattleFinish` | `0x1411FF760` | 1 | `0x14078C5B0` | Serializer candidate; decompile next |
-| `ProtocolResponseCasualRoomCreate` | `0x1411D4A30` | 3 | `0x14055AD80` | Parser candidate; function not yet defined |
-| `ProtocolNotifyCasualRoomOnMatchingComplete` | `0x1411D5110` | 3 | `0x14055AC40` | Parser candidate; function not yet defined |
+| `ProtocolResponseCasualRoomCreate` | `0x1411D4A30` | 3 | `0x14055AD80` | Deleting destructor, not a parser |
+| `ProtocolNotifyCasualRoomOnMatchingComplete` | `0x1411D5110` | 3 | `0x14055AC40` | Deleting destructor, not a parser |
 
 A candidate's position in a vtable is not sufficient evidence for its behavior.
-Confirm field operations, callers, and constants in the function itself.
+Confirm field operations, callers, and constants in the function itself. A
+throwaway Ghidra project subsequently resolved the response metadata without
+changing the active analysis project: entries 1/2 of the room-create response
+vtable return `13000`, and entries 1/2 of the matching-complete notification
+vtable return `12105`. The entry-3 parser-candidate labels were therefore wrong;
+constructor/callback analysis remains necessary for field-level parsing.
 
 ### Room-create request, sub-ID 12000
 
@@ -310,14 +315,28 @@ Add `adjustment_data_manage/get_version` and
 `season/get_selectable_stage`, then correlate battle start, results, member
 results, priority consumption, and requeue with shared battle state.
 
+Include the remaining targeted native research instead of treating the synthetic
+implementation as proof of client compatibility:
+
+- resolve room-create response parsing at `0x14055AD80` and matching-complete
+  notification parsing at `0x14055AC40`;
+- confirm remaining request serializers and command metadata where lifecycle
+  behavior is uncertain;
+- resolve the `isInvited`/`isInvite` disagreement against the original capture
+  before relying on that field;
+- use endpoint-specific response evidence for the two queue HTTP calls rather
+  than inventing response shapes.
+
 Replay the harvested HTTP sequence before running the patched client in the
 isolated guest. Compare live HTTP/UDP order with golden evidence and record every
 unexplained difference. No official or unintended external destination is
-allowed.
+allowed. Do not run the native client without an externally enforced firewall
+policy and capture environment.
 
 Done when login, queue, match setup, gameplay transport, results, and requeue
-complete using only private infrastructure and all synthetic and managed suites
-pass.
+complete using only private infrastructure, the targeted native questions are
+resolved or recorded with explicit uncertainty, and all synthetic and managed
+suites pass. Synthetic replay alone does not complete the real-client milestone.
 
 ## Immediate native research queue
 
@@ -506,6 +525,28 @@ This completes Milestone 4 for synthetic connection rooms and relay. It does not
 prove native-client interoperability or a long multi-peer soak. No live game test
 was run.
 
+### Milestone 5 progress - lifecycle replay and targeted research
+
+- Added `adjustment_data_manage/get_version` and
+  `season/get_selectable_stage` on both API route shapes. Their current response
+  shapes (`[0, 2]` and `[0, [1000]]`) remain provisional until capture evidence
+  confirms them; the native response vtables alone did not establish the shapes.
+- Battle start now creates per-user state, result/member-result/priority calls
+  require that state, and battle result clears it so the user can requeue.
+- Added a synthetic HTTP replay covering queue calls, battle start, related
+  result APIs, completion, and requeue. All 67 managed tests pass with zero build
+  warnings; the test-project format check passes and only the four baseline
+  server import-order findings remain.
+- Corrected the earlier parser candidates: entries 1/2 return `13000` and
+  `12105`, while entries 3 are deleting destructors. Constructor/callback
+  analysis is still needed for field-level parsing, and the invitation spelling
+  disagreement remains open.
+
+Native-client validation is **not complete**. No externally enforced firewall
+and capture environment has been established for this checkout, so no patched
+client was run. Milestone 5 remains open for live validation and confirmation of
+the provisional queue response shapes.
+
 ## Findings log
 
 ### 2026-11-08 - New baseline and initial executable/header correlation
@@ -579,6 +620,14 @@ was run.
 - Expanded the managed suite to 66 passing tests; no native game or long soak
   test was run.
 
+### 2026-11-08 - Milestone 5 synthetic lifecycle progress
+
+- Added queue HTTP routes, shared battle lifecycle state, and requeue behavior.
+- Corrected the response/notification vtable metadata and rejected the earlier
+  destructor/parser assumption.
+- Expanded the managed suite to 67 passing tests. Native live validation and the
+  two provisional queue response shapes remain open.
+
 ## Next update checklist
 
 - [x] Record the build/test/format result on merged PR #5; build and tests pass,
@@ -591,3 +640,7 @@ was run.
 - [x] Record the first isolated eight-client result without claiming success
       before the captured exit criteria pass.
 - [x] Complete Milestone 4 synthetic connection-room and P2P tests.
+- [x] Complete the synthetic HTTP lifecycle replay.
+- [ ] Confirm the queue-version and selectable-stage response shapes with capture
+      evidence.
+- [ ] Run native-client validation with an external firewall and packet capture.

@@ -48,6 +48,7 @@ public sealed class MatchmakingCoordinator(IOptions<BreakerOptions> options)
     private readonly int _port = options.Value.UdpSessionPort;
     private readonly object _sync = new();
     private readonly Dictionary<string, Player> _players = new(StringComparer.Ordinal);
+    private readonly Dictionary<string, string> _activeBattles = new(StringComparer.Ordinal);
     private int _serial;
 
     public int QueueCount
@@ -103,12 +104,51 @@ public sealed class MatchmakingCoordinator(IOptions<BreakerOptions> options)
         }
     }
 
+    public string StartBattle(string userId, string leader)
+    {
+        lock (_sync)
+        {
+            GetConnectionBinding(userId);
+            if (string.IsNullOrWhiteSpace(leader))
+                throw new InvalidDataException("A battle leader is required.");
+            if (!_activeBattles.TryGetValue(userId, out var battleId))
+            {
+                battleId = $"{leader}_{DateTimeOffset.Now:yyyyMMddHHmmss}";
+                _activeBattles[userId] = battleId;
+            }
+            return battleId;
+        }
+    }
+
+    public string RequireBattle(string userId)
+    {
+        lock (_sync)
+        {
+            return _activeBattles.TryGetValue(userId, out var battleId)
+                ? battleId
+                : throw new InvalidDataException("The user has no active battle.");
+        }
+    }
+
+    public void CompleteBattle(string userId)
+    {
+        lock (_sync)
+        {
+            RequireBattle(userId);
+            _activeBattles.Remove(userId);
+            RemovePlayer(userId);
+        }
+    }
+
     public void RemoveSession(string? userId)
     {
         if (userId is null)
             return;
         lock (_sync)
+        {
+            _activeBattles.Remove(userId);
             RemovePlayer(userId);
+        }
     }
 
     public void Expire(DateTimeOffset now)

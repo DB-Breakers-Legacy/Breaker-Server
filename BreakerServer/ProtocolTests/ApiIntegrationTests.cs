@@ -165,6 +165,63 @@ public sealed class ApiIntegrationTests : IClassFixture<BreakerApiFactory>
     }
 
     [Fact]
+    public async Task QueueBattleResultAndRequeueUseSharedLifecycleState()
+    {
+        var token = await Authenticate(UserId, UserId);
+        var queueRoutes = new[]
+        {
+            "/battle/waittime_preview",
+            "/battle/pre_matching_connection",
+            "/adjustment_data_manage/get_version",
+            "/battle/save_matching_cache",
+            "/season/get_selectable_stage"
+        };
+        foreach (var route in queueRoutes)
+        {
+            using var response = await Post($"/dbtb-prd/LALALALALA/025348/api{route}", AuthenticatedBody(token));
+            Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        }
+
+        var coordinator = _factory.Services.GetRequiredService<BreakerServer.Services.MatchmakingCoordinator>();
+        for (var index = 1; index <= 8; index++)
+        {
+            var userId = index == 1 ? UserId.ToString() : $"10000000000000000{index}";
+            var created = coordinator.Handle(new BreakerServer.Protocol.Diarkis.CsmsPacket(
+                userId, 3, 12000, "025348", "{\"gameRule\":0}", false));
+            var roomId = System.Text.Json.JsonDocument.Parse(created[1].Data)
+                .RootElement.GetProperty("roomId").GetString()!;
+            coordinator.Handle(new BreakerServer.Protocol.Diarkis.CsmsPacket(
+                userId, 3, 12017, "025348",
+                System.Text.Json.JsonSerializer.Serialize(new { roomId }), false));
+        }
+
+        using var started = await Post(
+            "/dbtb-prd/LALALALALA/025348/api/battle/start",
+            new object?[]
+            {
+                new Dictionary<string, object?> { ["userId"] = token },
+                new object?[] { 0, new object?[] { "leader" } }
+            });
+        Assert.Equal(HttpStatusCode.OK, started.StatusCode);
+        var startedBody = ObjectTree.List(await ReadResponse(started));
+        Assert.StartsWith("leader_", ObjectTree.Text(ObjectTree.List(startedBody[1])[1]));
+
+        foreach (var route in new[] { "/battle/consume_priority_point", "/battle/get_battle_member_result_list" })
+        {
+            using var response = await Post($"/dbtb-prd/LALALALALA/025348/api{route}", AuthenticatedBody(token));
+            Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        }
+
+        using var result = await Post("/dbtb-prd/LALALALALA/025348/api/battle/result", AuthenticatedBody(token));
+        Assert.Equal(HttpStatusCode.OK, result.StatusCode);
+        Assert.Throws<InvalidDataException>(() => coordinator.GetConnectionBinding(UserId.ToString()));
+
+        var requeue = coordinator.Handle(new BreakerServer.Protocol.Diarkis.CsmsPacket(
+            UserId.ToString(), 3, 12000, "025348", "{\"gameRule\":0}", false));
+        Assert.Equal(13000U, requeue.Last().SubId);
+    }
+
+    [Fact]
     public async Task MessageInfoRequiresAuthenticationAndKnownMessage()
     {
         using var anonymous = await Post(

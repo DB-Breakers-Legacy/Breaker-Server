@@ -55,8 +55,38 @@ public static class ApiEndpoints
         Static("/battle/pre_matching_connection", "preMatchingConnection");
         Static("/battle/save_matching_cache", "saveMatchingCache");
         Static("/player/upload_ghost_player", "uploadGhostPlayer");
-        Static("/battle/consume_priority_point", "consumePriorityPoint");
-        Static("/battle/get_battle_member_result_list", "getBattleMemberResultList");
+
+        api.MapPost("/battle/consume_priority_point", async (
+            HttpRequest request,
+            ApiResponseService responses,
+            ResponseCatalog catalog,
+            MatchmakingCoordinator coordinator,
+            RequestIdentityResolver identity,
+            CancellationToken ct) =>
+        {
+            var body = await MessagePackHttp.ReadAsync(request, ct);
+            coordinator.RequireBattle(identity.ResolveUserId(body).ToString());
+            return responses.Respond(catalog.Get("consumePriorityPoint"));
+        });
+
+        api.MapPost("/battle/get_battle_member_result_list", async (
+            HttpRequest request,
+            ApiResponseService responses,
+            ResponseCatalog catalog,
+            MatchmakingCoordinator coordinator,
+            RequestIdentityResolver identity,
+            CancellationToken ct) =>
+        {
+            var body = await MessagePackHttp.ReadAsync(request, ct);
+            coordinator.RequireBattle(identity.ResolveUserId(body).ToString());
+            return responses.Respond(catalog.Get("getBattleMemberResultList"));
+        });
+
+        api.MapPost("/adjustment_data_manage/get_version", (ApiResponseService responses) =>
+            responses.Respond(new object?[] { 0, 2 }));
+
+        api.MapPost("/season/get_selectable_stage", (ApiResponseService responses) =>
+            responses.Respond(new object?[] { 0, new object?[] { 1000 } }));
 
         api.MapPost("/user/create_user_info", async (
             HttpRequest request,
@@ -347,13 +377,16 @@ public static class ApiEndpoints
         api.MapPost("/battle/start", async (
             HttpRequest request,
             ApiResponseService responses,
+            MatchmakingCoordinator coordinator,
+            RequestIdentityResolver identity,
             CancellationToken ct) =>
         {
             var body = ObjectTree.List(await MessagePackHttp.ReadAsync(request, ct), 2);
+            var userId = identity.ResolveUserId(body).ToString();
             var args = ObjectTree.List(body[1], 2);
             var roster = ObjectTree.List(args[1], 1);
             var leader = ObjectTree.Text(roster[0]);
-            var battleId = $"{leader}_{DateTimeOffset.Now:yyyyMMddHHmmss}";
+            var battleId = coordinator.StartBattle(userId, leader);
 
             return responses.Respond(new object?[]
             {
@@ -364,8 +397,15 @@ public static class ApiEndpoints
             });
         });
 
-        api.MapPost("/battle/result", (ApiResponseService responses) =>
+        api.MapPost("/battle/result", async (
+            HttpRequest request,
+            ApiResponseService responses,
+            MatchmakingCoordinator coordinator,
+            RequestIdentityResolver identity,
+            CancellationToken ct) =>
         {
+            var body = await MessagePackHttp.ReadAsync(request, ct);
+            coordinator.CompleteBattle(identity.ResolveUserId(body).ToString());
             object?[] pass =
             [
                 9,
