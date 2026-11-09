@@ -528,24 +528,28 @@ was run.
 ### Milestone 5 progress - lifecycle replay and targeted research
 
 - Added `adjustment_data_manage/get_version` and
-  `season/get_selectable_stage` on both API route shapes. Their current response
-  shapes (`[0, 2]` and `[0, [1000]]`) remain provisional until capture evidence
-  confirms them; the native response vtables alone did not establish the shapes.
+  `season/get_selectable_stage` on both API route shapes. Offline TShark decoding
+  with the supplied keylog confirmed `[0, 2]` for version and seven string-ID /
+  localized-name stage pairs (`1000`, `1100`, `1110`, `1200`, `1300`, `1400`,
+  `1500`). The selectable-stage implementation and regression test now match that
+  response instead of the earlier provisional single-stage placeholder.
 - Battle start now creates per-user state, result/member-result/priority calls
   require that state, and battle result clears it so the user can requeue.
 - Added a synthetic HTTP replay covering queue calls, battle start, related
-  result APIs, completion, and requeue. All 67 managed tests pass with zero build
+  result APIs, completion, and requeue. All 68 managed tests pass with zero build
   warnings; the test-project format check passes and only the four baseline
   server import-order findings remain.
 - Corrected the earlier parser candidates: entries 1/2 return `13000` and
   `12105`, while entries 3 are deleting destructors. Constructor/callback
-  analysis is still needed for field-level parsing, and the invitation spelling
-  disagreement remains open.
+  analysis is still needed for field-level parsing.
+- Reassembled and decrypted the invite request at `matchmaking data 3.pcapng`
+  frame 1567851. It confirms `isInvited`, resolving the `isInvited`/`isInvite`
+  disagreement. No account identifiers, session keys, or captured payloads were
+  copied into this document.
 
 Native-client validation is **not complete**. No externally enforced firewall
 and capture environment has been established for this checkout, so no patched
-client was run. Milestone 5 remains open for live validation and confirmation of
-the provisional queue response shapes.
+client was run. Milestone 5 remains open for live validation.
 
 ## Findings log
 
@@ -628,19 +632,29 @@ the provisional queue response shapes.
 - Expanded the managed suite to 67 passing tests. Native live validation and the
   two provisional queue response shapes remain open.
 
+### 2026-11-08 - Capture-backed queue and invitation confirmation
+
+- Used the supplied TLS keylog only as an offline TShark input; no key material
+  or account payloads were committed.
+- Confirmed version `[0, 2]` and all seven selectable-stage ID/name pairs, and
+  updated the implementation and tests to match.
+- Reassembled the fragmented invite at frame 1567851 and confirmed `isInvited`.
+- Expanded the managed suite to 68 passing tests. Native-client validation and a
+  long soak remain open.
+
 ## Next update checklist
 
 - [x] Record the build/test/format result on merged PR #5; build and tests pass,
       with five baseline import-order findings documented.
 - [ ] Recover room-create response and matching-complete notification parsing.
 - [ ] Confirm the remaining request serializer candidates and command metadata.
-- [ ] Resolve the join-field spelling disagreement with capture evidence.
+- [x] Resolve the join-field spelling disagreement with capture evidence.
 - [x] Complete Milestone 1 golden transport tests.
 - [x] Complete Milestone 2 CSMS and fragmentation tests.
 - [x] Record the first isolated eight-client result without claiming success
       before the captured exit criteria pass.
 - [x] Complete Milestone 4 synthetic connection-room and P2P tests.
 - [x] Complete the synthetic HTTP lifecycle replay.
-- [ ] Confirm the queue-version and selectable-stage response shapes with capture
+- [x] Confirm the queue-version and selectable-stage response shapes with capture
       evidence.
 - [ ] Run native-client validation with an external firewall and packet capture.

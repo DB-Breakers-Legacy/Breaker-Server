@@ -108,6 +108,24 @@ public sealed class ApiIntegrationTests : IClassFixture<BreakerApiFactory>
     }
 
     [Fact]
+    public async Task QueueVersionAndSelectableStagesMatchCapturedResponses()
+    {
+        using var versionResponse = await Post(
+            "/dbtb-prd/LALALALALA/025348/api/adjustment_data_manage/get_version",
+            new object?[] { new Dictionary<string, object?>(), Array.Empty<object?>() });
+        var versionBody = ObjectTree.List(await ReadResponse(versionResponse));
+        Assert.Equal(2, ObjectTree.Int32(ObjectTree.List(versionBody[1])[1]));
+
+        using var stageResponse = await Post(
+            "/dbtb-prd/LALALALALA/025348/api/season/get_selectable_stage",
+            new object?[] { new Dictionary<string, object?>(), Array.Empty<object?>() });
+        var stageBody = ObjectTree.List(await ReadResponse(stageResponse));
+        var stages = ObjectTree.List(ObjectTree.List(stageBody[1])[1], 7);
+        var ids = stages.Select(row => ObjectTree.Text(ObjectTree.List(row, 2)[0])).ToArray();
+        Assert.Equal(["1000", "1100", "1110", "1200", "1300", "1400", "1500"], ids);
+    }
+
+    [Fact]
     public async Task MatchingHandoutsIssueFreshRegisteredKeysInWireOrder()
     {
         var first = await ReadMatchingHandout();

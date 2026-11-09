@@ -86,7 +86,20 @@ public static class ApiEndpoints
             responses.Respond(new object?[] { 0, 2 }));
 
         api.MapPost("/season/get_selectable_stage", (ApiResponseService responses) =>
-            responses.Respond(new object?[] { 0, new object?[] { 1000 } }));
+            responses.Respond(new object?[]
+            {
+                0,
+                new object?[]
+                {
+                    new object?[] { "1000", "ハイランドリバー" },
+                    new object?[] { "1100", "スノーマウンテン" },
+                    new object?[] { "1110", "ロックフィールド" },
+                    new object?[] { "1200", "ウォーターフロント" },
+                    new object?[] { "1300", "グリーンコースト" },
+                    new object?[] { "1400", "デンジャーグラウンド" },
+                    new object?[] { "1500", "ダークフューチャー" }
+                }
+            }));
 
         api.MapPost("/user/create_user_info", async (
             HttpRequest request,

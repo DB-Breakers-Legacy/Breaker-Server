@@ -33,17 +33,18 @@ has been performed.
 Done when the patched client completes that entire sequence using only private
 infrastructure and the capture contains no unintended destinations.
 
-## Priority 2 - Confirm provisional protocol behavior
+## Priority 2 - Protocol behavior confirmed from supplied captures
 
-- `adjustment_data_manage/get_version` currently returns `[0, 2]`.
-- `season/get_selectable_stage` currently returns `[0, [1000]]`.
+Offline TShark decoding with the supplied keylog confirmed:
 
-These are provisional development shapes, not confirmed captures. Replace them
-if live or archived evidence disagrees, and add the corresponding replay test.
+- `adjustment_data_manage/get_version` returns `[0, 2]`.
+- `season/get_selectable_stage` returns seven ID/name pairs with string IDs
+  `1000`, `1100`, `1110`, `1200`, `1300`, `1400`, and `1500`.
+- The invite request at `matchmaking data 3.pcapng` frame 1567851 uses
+  `isInvited`, resolving the earlier `isInvited`/`isInvite` disagreement.
 
-Also resolve the executable `isInvited` versus sanitized-note `isInvite`
-disagreement before relying on that join field. Record the capture ID/frame and
-executable build used to settle it.
+The implementation and regression tests now match these findings. No account
+identifiers, session keys, or captured payloads were copied into Git.
 
 ## Priority 3 - Finish targeted native research
 
@@ -91,8 +92,8 @@ behavior changes.
 - [x] HTTP lifecycle replay implemented.
 - [x] Targeted native parser metadata corrected.
 - [ ] Native client completes the full flow in an isolated captured run.
-- [ ] Provisional queue responses confirmed.
-- [ ] Invitation spelling resolved.
+- [x] Queue responses confirmed.
+- [x] Invitation spelling resolved.
 - [ ] Long multi-peer soak completed.
 - [x] Ponytail reductions applied.
 
