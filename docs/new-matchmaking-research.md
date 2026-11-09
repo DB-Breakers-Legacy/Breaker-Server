@@ -1,0 +1,455 @@
+# New matchmaking research and restoration plan
+
+Last updated: 2026-11-08
+
+## Purpose
+
+Track the remaining reverse engineering, server implementation, and verification
+needed to make Dragon Ball: The Breakers matchmaking work end to end. This is the
+active findings log; older reviews remain background evidence rather than proof
+of the current implementation state.
+
+The immediate goal is an eight-player match on private infrastructure: queue,
+room assembly, role assignment, connection-room handoff, P2P setup, match
+reporting, and requeue. Transport compatibility and CSMS framing must be restored
+before queue logic.
+
+## Implementation baseline
+
+All code work must be based on `main` containing
+[PR #5, cleanup for match making](https://github.com/DB-Breakers-Legacy/Breaker-Server/pull/5):
+
+- Source branch: `cleanup/matchmaking-prep`
+- Reviewed PR head: `22f49e8e35d2774457266d23fa8b7d542aaafb21`
+- Merged: 2026-11-09 01:26:08 UTC
+- Squash-merge commit on `main`: `f6ee3068bb1930325cfad5655b5ece8425bc46aa`
+- Implementation branch: `matchmaking/restoration-main`
+
+The reviewed PR head and squash-merge commit have identical tree SHA
+`d2d3e1b203de44d4c57776d06c3b18b6617c0793`, so the baseline verification applies
+to the merged code without drift. Recheck and record `origin/main` before later
+code milestones. Do not recreate the deleted `DiarkisSessionUdpService`; PR #5
+combines both listener roles in `DiarkisUdpService` and registers matching and
+session listeners separately in `Program.cs`.
+
+PR #5 establishes only the cleanup baseline:
+
+- one UDP service with matching and session listener roles;
+- per-client session-key resolution on the session listener;
+- magic-based cleartext directory replies and focused directory/session tests;
+- test logging configuration that works without event-log privileges.
+
+It does not restore captured packet types, crypto, reliability, matching-handout
+keys, CSMS, fragmentation in the live command path, or matchmaking state.
+
+Related documents:
+
+- [Header research](header-research.md)
+- [Earlier matchmaking reconstruction](matchmaking-reconstruction.md)
+- [Earlier restoration milestones](matchmaking-restoration-plan.md)
+- [Managed rewrite review](csharp-rewrite-review.md)
+- [Native networking review](new-review-netcode.md)
+- [Captured Diarkis structure](../../docs/DBTB-API-Documentation/md/Structure/Diarkis.md)
+- [Captured matchmaking flow](../../docs/DBTB-API-Documentation/md/API/Calls/Matchmaking_Flow.md)
+
+## Evidence and safety rules
+
+- Use decrypted captures first, executable RTTI/code second, public Diarkis
+  documentation third, and exploratory notes last.
+- Record the executable hash and build for every native address. Addresses here
+  are preferred-image virtual addresses with image base `0x140000000`.
+- The generated headers under `../../headers-dbreakers/generated` are RTTI
+  metadata, not C++ declarations or recovered object layouts.
+- A vtable address is not a function or hook target. Resolve and review each
+  entry before assigning it a behavioral name.
+- Label findings as confirmed, candidate/inferred, or unknown. Do not silently
+  combine schemas or addresses from different builds.
+- Start Ghidra work read-only. Define missing functions or data narrowly when
+  required, and review decompilation before renaming or changing prototypes.
+- Keep executables, Ghidra projects, packet captures, TLS keys, credentials, and
+  private decoder output outside Git.
+- Use synthetic loopback clients first. A native-client test requires the
+  isolated guest, an external firewall destination policy, and packet capture;
+  the native hooks alone are not a sufficient boundary.
+- Do not substitute public Diarkis ticket commands 218-229 for the game's custom
+  CSMS protocol. Command 219 is separately observed as the queue keepalive.
+
+## Executable baseline
+
+The active Ghidra program used for the initial pass is:
+
+```text
+Name: DRAGON BALL THE BREAKERS.exe
+SHA-256: 048796521daae21f12bbeb39c02fb4148049139aaf6141854921255064f7370c
+Format: Portable Executable (PE)
+Language: x86:LE:64:default
+Compiler: windows
+Image base: 0x140000000
+Ghidra: 12.1.4 with GhidraMCP 2.0
+```
+
+The RTTI descriptors for `ProtocolRequestCasualRoomCreate`,
+`ProtocolResponseCasualRoomCreate`, and
+`ProtocolNotifyCasualRoomOnMatchingComplete` exactly match the generated
+headers. Their vtable addresses and boundaries also match, so the shared header
+map is applicable to this executable. Continue validating each additional
+address as it is used.
+
+## Confirmed native findings
+
+### Vtable resolution
+
+Request vtables reviewed so far contain eight function entries followed by RTTI
+data for the next vtable. Response/notification vtables reviewed so far contain
+four function entries. Values such as `0x14143B690`, `0x14140A030`, and
+`0x14140B630` are RTTI data, not virtual-function entries.
+
+| Class | Vtable | Entry | Function | Status |
+| --- | ---: | ---: | ---: | --- |
+| `ProtocolRequestCasualRoomCreate` | `0x1411FF448` | 1 | `0x14078D4F0` | Confirmed JSON serializer |
+| `ProtocolRequestCasualRoomJoin` | `0x1411FF490` | 1 | `0x14078E020` | Confirmed JSON serializer |
+| `ProtocolRequestCasualRoomOpen` | `0x1411FF640` | 1 | `0x14078CE70` | Serializer candidate; decompile next |
+| `ProtocolRequestCasualRoomMemberDataSet` | `0x1411FF568` | 1 | `0x14078F1E0` | Serializer candidate; decompile next |
+| `ProtocolRequestCasualUpdateMatchedSdp` | `0x1411FF7F0` | 1 | `0x140790CE0` | Serializer candidate; decompile next |
+| `ProtocolRequestCasualCreateConnectionRoom` | `0x1411FF6D0` | 1 | `0x14078B6C0` | Shared candidate; decompile next |
+| `ProtocolRequestCasualJoinConnectionRoom` | `0x1411FF718` | 1 | `0x14078B6C0` | Shared candidate; decompile next |
+| `ProtocolRequestCasualReportBattleFinish` | `0x1411FF760` | 1 | `0x14078C5B0` | Serializer candidate; decompile next |
+| `ProtocolResponseCasualRoomCreate` | `0x1411D4A30` | 3 | `0x14055AD80` | Parser candidate; function not yet defined |
+| `ProtocolNotifyCasualRoomOnMatchingComplete` | `0x1411D5110` | 3 | `0x14055AC40` | Parser candidate; function not yet defined |
+
+A candidate's position in a vtable is not sufficient evidence for its behavior.
+Confirm field operations, callers, and constants in the function itself.
+
+### Room-create request, sub-ID 12000
+
+The serializer at `0x14078D4F0` emits these JSON keys in this order:
+
+```text
+gameRule
+userName
+userRank
+userRivalRank
+appVersion
+blockList
+sdpData
+natType
+userIp
+platformUserId
+diarkisNatType
+```
+
+This independently supports the captured 12000 key set. Captures establish
+`blockList` as an array and provide the nested `sdpData` shape. JSON member order
+is recorded as static evidence but is not assumed to be semantically required
+without a corresponding wire requirement.
+
+### Room-join request, sub-ID 12001
+
+The serializer at `0x14078E020` emits:
+
+```text
+roomId
+roomKey
+userName
+userRank
+userRivalRank
+blockList
+sdpData
+natType
+appVersion
+userIp
+resultList
+platformUserId
+isInvited
+diarkisNatType
+```
+
+The key set otherwise agrees with the captured join request. One disagreement
+must remain open: the executable string is **`isInvited`**, while the sanitized
+capture table currently says **`isInvite`**. Check the original capture and build
+before implementing this field; do not silently choose either spelling.
+
+### Still unknown from native code
+
+- response and notification field reads, validation, and callback targets;
+- constructors' command/sub-ID metadata and the remaining request serializers;
+- matched-SDP semantics and connection-room state transitions;
+- orchestration order enforced by `CasualMatchingModule`,
+  `MatchingServerManager`, and `MatchingSubModule*`;
+- whether the `isInvited`/`isInvite` disagreement is a note error or build skew;
+- live-client interoperability of the managed server.
+
+## PR #5 baseline server gaps
+
+The PR #5 head and diff established the following required work. These are the
+baseline findings, not claims that every item remains open; the milestone results
+below record what has subsequently been completed:
+
+1. Restore `/dbtb-prd/{prefix}/{title}/api` compatibility while retaining current
+   development routes, and add the captured queue-time HTTP endpoints.
+2. Issue fresh matching-session SID/AES/IV/HMAC sets through
+   `SessionKeyRegistry`; the matching handout still uses global configured keys.
+3. Replace the old packet-state values with captured SYN 2, reliable DAT 3,
+   ACK 4, retransmission 5, and FIN 7 behavior.
+4. Restore zero-padded AES-CBC envelopes, HMAC-verified `plen=0` and
+   under-reported-length handling, cleartext SID prefixes, and correct command
+   payload framing without the extra clear-length field.
+5. Restore init/heartbeat replies, NAT exchange, public-address reporting,
+   unacked-DAT tracking, type-5 retransmission, batched ACKs, and FIN ACKs.
+6. Connect per-peer fragment reassembly and outbound fragmentation to live UDP
+   command processing.
+7. Implement CSMS and all matchmaking/connection-room state rather than adding
+   more hardcoded command replies.
+8. Replace self-consistent test vectors with sanitized golden wire fixtures and
+   multi-client interoperability tests.
+
+The merged service's command-send path still accepts only a byte sequence even
+though the datagram header supports 24 bits; remove that truncation during the
+transport milestone.
+
+## Implementation plan
+
+### Milestone 0 - Establish the PR #5 baseline
+
+Code/research tasks:
+
+- create the implementation branch from the current PR #5 head;
+- run restore, Release build, tests, and formatting on the untouched baseline;
+- record the results and the final PR head SHA here;
+- confirm the executable hash above before further native analysis;
+- back up the Ghidra project before defining missing functions or vtable data.
+
+Done when the clean PR #5 baseline builds and passes its existing suite, and any
+pre-existing failure is recorded rather than attributed to new work.
+
+### Milestone 1 - Restore captured HTTP and transport behavior (complete for synthetic loopback transport)
+
+Implement the HTTP routes, matching key issuance, packet types, crypto,
+bootstrap/heartbeat, NAT behavior, reliability, FIN acknowledgement, redirect
+key carryover, and live fragmentation listed above.
+
+Verification:
+
+- golden codec vectors cover zero padding, `plen=0`, under-reported lengths,
+  SID prefixes, tampering, truncation, and conflicting fragments;
+- two independent synthetic clients complete bootstrap and heartbeat with
+  different keys and sequence spaces;
+- retransmission stops after batched ACKs, FIN receives the correct ACK, and a
+  redirect probe preserves the SID/key set;
+- captured-route HTTP replay reaches the expected handlers;
+- no production command handler relies on packet length as a substitute for
+  magic/type parsing.
+
+### Milestone 2 - Implement and verify CSMS framing
+
+Implement command 12000 and 22000 client requests, server responses, and server
+pushes. Include MessagePack envelopes, double-encoded JSON `data`, nested JSON
+strings, UID/platform headers, exact lengths, and request-plus-1000 response
+sub-ID mapping.
+
+Verification:
+
+- sanitized golden CSMS vectors round-trip byte-exactly;
+- the fragmented 1502-byte ticket create and multi-fragment final roster pass in
+  both directions;
+- malformed framing, invalid lengths, and conflicting fragments fail safely
+  without dropping the listener;
+- the join spelling disagreement is resolved before that field is encoded.
+
+### Milestone 3 - Implement the matchmaking room coordinator
+
+Implement 12000 create, 12001 invite/rematch join, 12002 keepalive, 12005 member
+update, 12012 search preferences, and 12017 completion. Maintain shared room,
+battle-room, connection-room, member-profile, and queue state.
+
+Emit 13000-series responses and 12101, 12102, 12105, 12118, 12119, and 12120
+pushes in captured order. Assign one Raider and seven Survivors, handle queue
+keepalive command 219, and implement cancellation, disconnect, timeout, and
+requeue cleanup.
+
+Verification:
+
+- eight synthetic clients reach a complete battle room;
+- every member receives consistent role and final-roster data, including
+  fragmented pushes;
+- duplicate joins and stale-member cleanup pass;
+- `get_connection_server_info` returns the assembled battle's binding rather
+  than unrelated global state.
+
+### Milestone 4 - Implement connection handoff and P2P
+
+Support redirect and no-redirect variants, 22000-series attach/report flows,
+23000-series responses, 22100-series pushes, room commands 11, 14, 101, 102,
+103, and 115, cmd-127 mesh setup, cmd-301 completion reports, and the captured
+reliable/unreliable relay commands.
+
+Verification:
+
+- all eight clients attach to one connection room;
+- redirect and no-redirect socket tests preserve the correct SID/key set;
+- member leave/dissolution and missing-room behavior match golden evidence;
+- reliable relay retransmits, unreliable relay does not, and non-members cannot
+  read or inject room traffic;
+- a soak run does not leave unbounded session, fragment, or retransmission state.
+
+### Milestone 5 - Correlate HTTP lifecycle and validate the real client
+
+Add `adjustment_data_manage/get_version` and
+`season/get_selectable_stage`, then correlate battle start, results, member
+results, priority consumption, and requeue with shared battle state.
+
+Replay the harvested HTTP sequence before running the patched client in the
+isolated guest. Compare live HTTP/UDP order with golden evidence and record every
+unexplained difference. No official or unintended external destination is
+allowed.
+
+Done when login, queue, match setup, gameplay transport, results, and requeue
+complete using only private infrastructure and all synthetic and managed suites
+pass.
+
+## Immediate native research queue
+
+1. Define and decompile `0x14055AD80`; recover room-create response field reads,
+   validation, stored offsets, and callbacks with address citations.
+2. Define and decompile `0x14055AC40`; do the same for matching-complete
+   notification parsing and dispatch.
+3. Decompile the confirmed vtable-entry-1 candidates for room open, member-data
+   update, matched SDP, connection-room create/join, and battle finish.
+4. Inspect constructors and callers to recover command/sub-ID constants and
+   object initialization; do not infer constants solely from class names.
+5. Resolve the response/notification vtables for matched SDP, room data changes,
+   connection-room creation, all-players-joined, and member updates.
+6. Trace `CasualMatchingModule`, `MatchingServerManager`, and the relevant
+   `MatchingSubModule*` classes to confirm state transitions and call order.
+7. Resolve `isInvited` versus `isInvite` against the original capture and record
+   the capture ID/frame and executable build.
+
+Each completed item must update the confirmed findings or open-questions section
+and identify any server fixture that can now be written.
+
+## Verification commands
+
+Run on the merged-main implementation branch for every code milestone:
+
+```powershell
+dotnet restore BreakerServer/ProtocolTests/ProtocolTests.csproj
+dotnet build BreakerServer/BreakerServer/BreakerServer.csproj --configuration Release --no-restore
+dotnet test BreakerServer/ProtocolTests/ProtocolTests.csproj --configuration Release --no-restore
+dotnet format BreakerServer/BreakerServer/BreakerServer.csproj --verify-no-changes --no-restore
+```
+
+A passing suite proves only what its fixtures cover. Do not mark a wire milestone
+done without the corresponding golden or multi-client check, and do not claim
+live interoperability without the isolated real-client run.
+
+### Milestone 0 result - merged PR #5 baseline
+
+Verified on `matchmaking/restoration-main` at
+`f6ee3068bb1930325cfad5655b5ece8425bc46aa` using the repository-local,
+ignored `.sandbox-dotnet` SDK version 10.0.403:
+
+- Restore: passed for `ProtocolTests` and its server dependency.
+- Release build: passed with zero warnings and zero errors.
+- Tests: all 39 passed; none failed or skipped.
+- Format: reported pre-existing import-order findings in
+  `Network/DiarkisUdpService.cs`, `Network/StunUdpService.cs`,
+  `Services/ResponseCatalog.cs`, `Services/SessionKeyRegistry.cs`, and
+  `Services/StarterDataStore.cs`. These files were left unchanged during the
+  baseline task; formatting is not being reported as passing.
+
+Milestone 0 is complete because the clean baseline builds and passes its tests
+and the formatting result has been recorded explicitly.
+
+### Milestone 1 result - captured transport restored for synthetic clients
+
+Implemented on `matchmaking/restoration-main` using the captured protocol
+structure and the historical Python peer's tested behavior:
+
+- Added `/dbtb-prd/{prefix}/{title}/api` alongside the existing development
+  route for game and news handlers.
+- Matching handouts now issue fresh registered keys in wire order
+  `SID, AES, IV, HMAC`; both UDP listeners resolve sessions through the shared
+  registry.
+- Replaced the legacy packet states with type-1 unreliable, type-2 SYN, type-3
+  reliable DAT, type-4 ACK, type-5 retransmission, and type-7 FIN handling.
+- Restored zero-padded AES-CBC, HMAC-verified `plen=0` and under-reported-length
+  acceptance, client SID validation, and command bodies without an extra clear
+  length field.
+- Added per-SID 24-bit server sequence spaces, bounded deduplication, unacked
+  tracking, 500 ms retransmission, batched ACK handling, and FIN ACKs carrying
+  the server's next sequence.
+- Restored init/heartbeat replies with the server-observed address, NAT and
+  endpoint exchanges, directory responses, and the session-probe redirect.
+- Connected client fragment reassembly and server fragmentation to live command
+  processing.
+
+Verification:
+
+- Release build passed with zero warnings and zero errors.
+- All 53 tests passed, including an independently generated AES/HMAC golden
+  vector, crypto length edge cases, captured bootstrap/heartbeat behavior, two
+  independent clients, retransmission and batched ACKs, FIN, redirect key
+  carryover, and fragmented client init.
+- `dotnet format` on `ProtocolTests.csproj` passed. The server-only format check
+  reports only the four remaining baseline import-order findings in
+  `StunUdpService.cs`, `ResponseCatalog.cs`, `SessionKeyRegistry.cs`, and
+  `StarterDataStore.cs`; no new formatting finding remains in the changed files.
+
+This completes the synthetic Milestone 1 exit criteria. CSMS, queue/room state,
+and the queue-time HTTP response shapes remain later milestones. No native game
+or live-client interoperability test was run.
+
+## Findings log
+
+### 2026-11-08 - New baseline and initial executable/header correlation
+
+- Selected PR #5 head `22f49e8e35d2774457266d23fa8b7d542aaafb21` as the required
+  implementation baseline and reviewed its merged UDP service and tests.
+- Recorded target SHA-256
+  `048796521daae21f12bbeb39c02fb4148049139aaf6141854921255064f7370c`.
+- Confirmed exact RTTI descriptor and vtable agreement between the executable
+  and shared generated headers for the initial room-create and
+  matching-complete classes.
+- Confirmed room-create serializer `0x14078D4F0` and room-join serializer
+  `0x14078E020`, including their JSON key order.
+- Resolved the next request serializer candidates and identified response and
+  notification parser candidates `0x14055AD80` and `0x14055AC40`.
+- Found the unresolved `isInvited`/`isInvite` schema disagreement.
+- Confirmed that PR #5 is a cleanup baseline, not a transport or matchmaking
+  compatibility implementation.
+- No server code was changed, no managed test was run on the PR head in this
+  checkout, and no live-client interoperability test was performed.
+
+### 2026-11-08 - PR #5 merged and baseline verified
+
+- PR #5 was squash-merged as `f6ee3068bb1930325cfad5655b5ece8425bc46aa`; its
+  tree is identical to the reviewed PR head.
+- Created `matchmaking/restoration-main` from the merged `main` commit.
+- Installed .NET SDK 10.0.403 only in the ignored `.sandbox-dotnet` directory
+  because the machine had no SDK on PATH.
+- Restore and Release build passed with zero warnings; all 39 tests passed.
+- Recorded five pre-existing import-order formatting findings without changing
+  server code.
+
+### 2026-11-08 - Milestone 1 synthetic transport completed
+
+- Restored captured HTTP route shapes and fresh matching-session key handouts.
+- Ported captured crypto, packet, bootstrap, reliability, redirect, FIN, and
+  fragmentation behavior to the merged C# UDP service.
+- Expanded the managed suite from 39 to 53 tests; all pass.
+- Confirmed redirect key carryover with a real second listener and independent
+  bootstrap/heartbeat state with two synthetic clients.
+- Preserved the four unrelated baseline formatting findings and documented that
+  no native live-client test has been performed.
+
+## Next update checklist
+
+- [x] Record the build/test/format result on merged PR #5; build and tests pass,
+      with five baseline import-order findings documented.
+- [ ] Recover room-create response and matching-complete notification parsing.
+- [ ] Confirm the remaining request serializer candidates and command metadata.
+- [ ] Resolve the join-field spelling disagreement with capture evidence.
+- [x] Complete Milestone 1 golden transport tests.
+- [ ] Complete Milestone 2 CSMS and fragmentation tests.
+- [ ] Record the first isolated eight-client result without claiming success
+      before the captured exit criteria pass.

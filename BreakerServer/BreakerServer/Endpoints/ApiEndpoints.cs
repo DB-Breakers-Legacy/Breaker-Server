@@ -22,7 +22,13 @@ public static class ApiEndpoints
 
     private static void MapGame(IEndpointRouteBuilder app)
     {
-        var api = app.MapGroup("/dbtb-prd/{title}/api");
+        MapGame(app, "/dbtb-prd/{title}/api");
+        MapGame(app, "/dbtb-prd/{prefix}/{title}/api");
+    }
+
+    private static void MapGame(IEndpointRouteBuilder app, string prefix)
+    {
+        var api = app.MapGroup(prefix);
         void Static(string path, string name) =>
             api.MapPost(path, (ApiResponseService responses, ResponseCatalog catalog) =>
                 responses.Respond(catalog.Get(name)));
@@ -221,21 +227,25 @@ public static class ApiEndpoints
 
         api.MapPost("/battle/get_diarkis_matching_server_info", (
             ApiResponseService responses,
+            SessionKeyRegistry registry,
             IOptions<BreakerOptions> options) =>
-            responses.Respond(new object?[]
+        {
+            var keys = registry.Create();
+            return responses.Respond(new object?[]
             {
                 0,
                 new object?[]
                 {
                     options.Value.UdpHost,
                     options.Value.UdpPort,
-                    options.Value.DiarkisIvKey.ToLowerInvariant(),
-                    options.Value.DiarkisAesKey.ToLowerInvariant(),
-                    options.Value.DiarkisSidKey.ToLowerInvariant(),
-                    options.Value.DiarkisHashKey.ToLowerInvariant()
+                    keys.Sid,
+                    keys.Aes,
+                    keys.Iv,
+                    keys.Mac
                 },
                 new object?[] { 1, 1 }
-            }));
+            });
+        });
 
         api.MapPost("/message/get_message_list", async (
             HttpRequest request,

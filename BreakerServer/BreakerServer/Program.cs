@@ -25,7 +25,8 @@ builder.Services.AddSingleton<SessionKeyRegistry>();
 builder.Services.AddSingleton<AuthSessionRegistry>();
 builder.Services.AddHostedService(services => new DiarkisUdpService(
     services.GetRequiredService<IOptions<BreakerOptions>>(),
-    services.GetRequiredService<ILogger<DiarkisUdpService>>()));
+    services.GetRequiredService<ILogger<DiarkisUdpService>>(),
+    sessionKeys: services.GetRequiredService<SessionKeyRegistry>()));
 builder.Services.AddHostedService(services => new DiarkisUdpService(
     services.GetRequiredService<IOptions<BreakerOptions>>(),
     services.GetRequiredService<ILogger<DiarkisUdpService>>(),

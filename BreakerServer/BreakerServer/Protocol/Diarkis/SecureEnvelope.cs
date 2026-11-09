@@ -1,11 +1,16 @@
-using System;
 using System.Buffers.Binary;
 using System.Security.Cryptography;
 
 namespace BreakerServer.Protocol.Diarkis;
 
 public sealed record DiarkisKeySet(byte[] Sid, byte[] Key, byte[] Iv, byte[] Mac);
-public sealed record SecureEnvelopeResult(int PlaintextLength, byte[]? Plaintext, bool HmacOk, bool PaddingOk, string Note);
+public sealed record SecureEnvelopeResult(
+    int PlaintextLength,
+    byte[]? Plaintext,
+    bool HmacOk,
+    bool PaddingOk,
+    string Note,
+    bool? SidOk = null);
 
 public static class SecureEnvelope
 {
@@ -33,20 +38,17 @@ public static class SecureEnvelope
             throw new InvalidOperationException($"Diarkis IV must be {BlockSize} bytes; got {keys.Iv.Length}.");
         if (keys.Mac.Length == 0)
             throw new InvalidOperationException("Diarkis HMAC key cannot be empty.");
-        if (keys.Sid.Length == 0)
-            throw new InvalidOperationException("Diarkis SID key cannot be empty.");
+        if (keys.Sid.Length != 16)
+            throw new InvalidOperationException("Diarkis SID must be 16 bytes.");
     }
 
     public static byte[] Encrypt(ReadOnlySpan<byte> plaintext, DiarkisKeySet keys)
     {
         Validate(keys);
 
-        // The client always allocates one full CBC padding block when the
-        // plaintext is already block-aligned.
         var padding = BlockSize - (plaintext.Length & (BlockSize - 1));
         var padded = new byte[plaintext.Length + padding];
         plaintext.CopyTo(padded);
-        padded.AsSpan(plaintext.Length).Fill((byte)padding);
 
         byte[] ciphertext;
         using (var aes = Aes.Create())
@@ -70,22 +72,35 @@ public static class SecureEnvelope
         return output;
     }
 
-    public static SecureEnvelopeResult Decrypt(ReadOnlySpan<byte> input, DiarkisKeySet keys)
+    public static SecureEnvelopeResult Decrypt(
+        ReadOnlySpan<byte> input,
+        DiarkisKeySet keys,
+        bool fromClient = false)
     {
         Validate(keys);
 
+        bool? sidOk = null;
+        if (fromClient)
+        {
+            if (input.Length < keys.Sid.Length)
+                return new(0, null, false, false, "missing SID prefix", false);
+
+            sidOk = input[..keys.Sid.Length].SequenceEqual(keys.Sid);
+            input = input[keys.Sid.Length..];
+        }
+
         if (input.Length < HeaderSize + BlockSize)
-            return new(0, null, false, false, $"short envelope len={input.Length}");
+            return new(0, null, false, false, $"short envelope len={input.Length}", sidOk);
 
         var declaredLength = BinaryPrimitives.ReadUInt32BigEndian(input[..4]);
         if (declaredLength > int.MaxValue)
-            return new(0, null, false, false, "Invalid plaintext size.");
+            return new(0, null, false, false, "Invalid plaintext size.", sidOk);
+
         var plaintextLength = (int)declaredLength;
         var expectedMac = input.Slice(4, HmacSize);
         var ciphertext = input[HeaderSize..];
-
-        if (ciphertext.Length == 0 || ciphertext.Length % BlockSize != 0)
-            return new(plaintextLength, null, false, false, $"ciphertext len={ciphertext.Length} is not block aligned");
+        if (ciphertext.Length % BlockSize != 0)
+            return new(plaintextLength, null, false, false, $"ciphertext len={ciphertext.Length} is not block aligned", sidOk);
 
         byte[] actualMac;
         using (var hmac = new HMACSHA256(keys.Mac))
@@ -93,7 +108,7 @@ public static class SecureEnvelope
 
         var hmacOk = CryptographicOperations.FixedTimeEquals(expectedMac, actualMac);
         if (!hmacOk)
-            return new(plaintextLength, null, false, false, "HMAC-SHA256 mismatch");
+            return new(plaintextLength, null, false, false, "HMAC-SHA256 mismatch", sidOk);
 
         byte[] padded;
         try
@@ -109,26 +124,31 @@ public static class SecureEnvelope
         }
         catch (CryptographicException ex)
         {
-            return new(plaintextLength, null, true, false, ex.Message);
+            return new(plaintextLength, null, true, false, ex.Message, sidOk);
         }
 
-        if (padded.Length == 0)
-            return new(plaintextLength, null, true, false, "empty decrypted buffer");
-
-        var padding = padded[^1];
-        if (padding is 0 or > BlockSize || padding > padded.Length)
-            return new(plaintextLength, null, true, false, $"invalid CBC padding value={padding}");
-
-        for (var i = padded.Length - padding; i < padded.Length; i++)
+        if (plaintextLength > 0 && plaintextLength <= padded.Length &&
+            padded[plaintextLength..].IndexOfAnyExcept((byte)0) < 0)
         {
-            if (padded[i] != padding)
-                return new(plaintextLength, null, true, false, "invalid CBC padding bytes");
+            return new(plaintextLength, padded[..plaintextLength], true, true, string.Empty, sidOk);
         }
 
-        var unpaddedLength = padded.Length - padding;
-        if (plaintextLength != unpaddedLength)
-            return new(plaintextLength, null, true, true, $"payload size mismatch expected={plaintextLength} actual={unpaddedLength}");
+        var contentLength = padded.Length;
+        while (contentLength > 0 && padded[contentLength - 1] == 0)
+            contentLength--;
 
-        return new(plaintextLength, padded[..unpaddedLength], true, true, string.Empty);
+        if (plaintextLength == 0)
+        {
+            var note = contentLength == 0 ? string.Empty : "plen0-nonzero-tail";
+            return new(contentLength, padded[..contentLength], true, contentLength != 0, note, sidOk);
+        }
+
+        return new(
+            plaintextLength,
+            padded[..contentLength],
+            true,
+            false,
+            $"pad-ext plen={plaintextLength} content={contentLength}",
+            sidOk);
     }
 }

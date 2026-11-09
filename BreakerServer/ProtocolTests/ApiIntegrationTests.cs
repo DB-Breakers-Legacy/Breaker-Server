@@ -97,6 +97,45 @@ public sealed class ApiIntegrationTests : IClassFixture<BreakerApiFactory>
                 .Value.Limits.MaxRequestBodySize);
 
     [Fact]
+    public async Task CapturedPrefixRouteMapsToExistingHandlers()
+    {
+        using var response = await Post(
+            "/dbtb-prd/LALALALALA/025348/api/news/get_2d_ui_news_list",
+            new object?[] { new Dictionary<string, object?>(), Array.Empty<object?>() });
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        Assert.NotNull(await ReadResponse(response));
+    }
+
+    [Fact]
+    public async Task MatchingHandoutsIssueFreshRegisteredKeysInWireOrder()
+    {
+        var first = await ReadMatchingHandout();
+        var second = await ReadMatchingHandout();
+
+        Assert.NotEqual(first, second);
+        var registry = _factory.Services.GetRequiredService<BreakerServer.Services.SessionKeyRegistry>();
+        var sid = Convert.FromHexString(first[2]);
+        Assert.True(registry.TryResolve(sid, out var keys));
+        Assert.Equal(first[2], Convert.ToHexString(keys!.Sid).ToLowerInvariant());
+        Assert.Equal(first[3], Convert.ToHexString(keys.Key).ToLowerInvariant());
+        Assert.Equal(first[4], Convert.ToHexString(keys.Iv).ToLowerInvariant());
+        Assert.Equal(first[5], Convert.ToHexString(keys.Mac).ToLowerInvariant());
+    }
+
+    private async Task<string[]> ReadMatchingHandout()
+    {
+        using var response = await Post(
+            "/dbtb-prd/LALALALALA/025348/api/battle/get_diarkis_matching_server_info",
+            new object?[] { new Dictionary<string, object?>(), Array.Empty<object?>() });
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+
+        var body = ObjectTree.List(await ReadResponse(response));
+        var handout = ObjectTree.List(ObjectTree.List(body[1])[1], 6);
+        return handout.Select(ObjectTree.Text).ToArray();
+    }
+
+    [Fact]
     public async Task MessageInfoRequiresAuthenticationAndKnownMessage()
     {
         using var anonymous = await Post(
