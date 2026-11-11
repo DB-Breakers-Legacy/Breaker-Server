@@ -23,6 +23,7 @@ namespace
 {
     constexpr std::uintptr_t kGameGlobalPtrRva = 0x177E470;   // XG::Game global holding the 8 player slots
     constexpr std::uintptr_t kLobbyStartRva = 0x67B260;       // sub_14067B260 (GamePhaseLobby: start the match)
+    constexpr std::uintptr_t kAddRaiderBotRva = 0x8BF360;     // sub_1408BF360 (lobby adds the Raider bot to slot 7)
     constexpr std::uintptr_t kLobbyPhaseState = 0x308;        // GamePhaseLobby+0x308, set to 16 when the match starts
     constexpr std::uintptr_t kPracticeFlag = 0x28;            // slots+0x28: practice room
     constexpr std::uintptr_t kMakeBotSlotRva = 0x8C0B70;      // sub_1408C0B70
@@ -43,12 +44,16 @@ namespace
     constexpr std::uint32_t kAiModeOrientation = 6;
 
     using LobbyStartFn = void(__fastcall*)(std::uintptr_t);
+    using AddRaiderBotFn = void(__fastcall*)(std::uintptr_t, std::uint32_t, std::uint32_t, std::uint8_t, std::uint8_t);
     using MakeBotSlotFn = void(__fastcall*)(std::uintptr_t, std::uint32_t, std::uint32_t, std::uint32_t);
     using TutorialGetFn = std::uintptr_t(__fastcall*)(std::uintptr_t);
     using StringAssignFn = void*(__fastcall*)(void*, const char*, std::size_t);
 
     std::uintptr_t g_Base = 0;
     int g_BotCount = 0;
+    bool g_RaiderBot = true;
+    void* g_AddRaiderBotTarget = nullptr;
+    AddRaiderBotFn g_OriginalAddRaiderBot = nullptr;
     void* g_LobbyStartTarget = nullptr;
     void* g_TutorialGetTarget = nullptr;
     LobbyStartFn g_OriginalLobbyStart = nullptr;
@@ -94,6 +99,19 @@ namespace
             " control=" + std::to_string(At<std::uint32_t>(slot + kSlotControl)) +
             " aiMode=" + std::to_string(At<std::uint32_t>(slot + kSlotAiMode)) +
             " kind=" + std::to_string(At<std::uint32_t>(slot + kSlotKind)) + ")");
+    }
+
+    // practice_raider_bot=0: the lobby's "no player is the Raider -> add the Raider bot" step is skipped,
+    // so the practice match has no Raider at all (experimental; for testing survivor bots on their own).
+    void __fastcall AddRaiderBotDetour(
+        std::uintptr_t slots, std::uint32_t slotIndex, std::uint32_t a3, std::uint8_t a4, std::uint8_t a5)
+    {
+        if (!g_RaiderBot)
+        {
+            Logger::Info("PracticeBots: Raider bot skipped (practice_raider_bot=0)");
+            return;
+        }
+        g_OriginalAddRaiderBot(slots, slotIndex, a3, a4, a5);
     }
 
     // The lobby phase function runs every frame; the match starts in the call that sets +0x308 to 16.
@@ -178,13 +196,25 @@ bool PracticeBots::Init()
         reinterpret_cast<void**>(&g_OriginalTutorialGet), &g_TutorialGetTarget, "sub_1408924D0 (null guard)");
     const bool add = Hook(kLobbyStartRva, reinterpret_cast<void*>(&LobbyStartDetour),
         reinterpret_cast<void**>(&g_OriginalLobbyStart), &g_LobbyStartTarget, "sub_14067B260 (lobby match start)");
-    return guard && add;
+
+    g_RaiderBot = GetPrivateProfileIntA("steam", "practice_raider_bot", 1, SteamConfig::GetPath().c_str()) != 0;
+    bool raider = true;
+    if (!g_RaiderBot)
+    {
+        raider = Hook(kAddRaiderBotRva, reinterpret_cast<void*>(&AddRaiderBotDetour),
+            reinterpret_cast<void**>(&g_OriginalAddRaiderBot), &g_AddRaiderBotTarget, "sub_1408BF360 (skip Raider bot)");
+        Logger::Info("PracticeBots: practice matches without the Raider bot (practice_raider_bot=0)");
+    }
+    return guard && add && raider;
 }
 
 void PracticeBots::Shutdown()
 {
     if (g_LobbyStartTarget)
         HookManager::Disable(g_LobbyStartTarget);
+    if (g_AddRaiderBotTarget)
+        HookManager::Disable(g_AddRaiderBotTarget);
+    g_AddRaiderBotTarget = nullptr;
     if (g_TutorialGetTarget)
         HookManager::Disable(g_TutorialGetTarget);
     g_LobbyStartTarget = nullptr;
