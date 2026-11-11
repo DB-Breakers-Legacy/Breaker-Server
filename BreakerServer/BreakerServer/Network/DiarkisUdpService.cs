@@ -816,10 +816,10 @@ public sealed class DiarkisUdpService(
         _ = Task.Run(async () =>
         {
             await Task.Delay(CasualAutofillAfter, ct);
-            logger.LogInformation("Casual matchmaking: {Seconds} s passed with no players, filling the room with bots", CasualAutofillAfter.TotalSeconds);
-            session.PracticeTrial = true;
-            await SendPracticeMembersAsync(udp, session, version, request, ct);
-            await SendPracticeCanOpenAsync(udp, session, version, request, ct);
+            // The casual room is the player's party: bots must not join it (2026-11-11, project lead: "the bots
+            // cannot be in the same party as me"). No bot members here; the match is found with only the party
+            // and the client DLL adds the bots inside the match.
+            logger.LogInformation("Casual matchmaking: {Seconds} s passed with no players, starting the match with bots", CasualAutofillAfter.TotalSeconds);
 
             var desire = session.PracticeDesire ?? [];
             var role = desire["desiredRole"]?.GetValue<int>() ?? 1;
