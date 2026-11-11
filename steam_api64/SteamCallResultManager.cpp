@@ -392,6 +392,23 @@ namespace SteamCallResultManager
             g_Results.end(),
             [call](const CallResultRecord& result) { return result.Call == call; });
 
+        if (resultIt == g_Results.end() || resultIt->CallbackID != 2101)
+        {
+            // Diagnostic (2026-11-10): non-HTTP call results were never logged, which hid whether the
+            // game registered for e.g. LobbyCreated_t (513).
+            Logger::Info(
+                "CallResult registered call=" +
+                std::to_string(static_cast<unsigned long long>(call)) +
+                " callbackID=" +
+                (resultIt != g_Results.end() ? std::to_string(resultIt->CallbackID) : std::string("unknown")) +
+                " completed=" +
+                (resultIt != g_Results.end() && resultIt->Completed ? "1" : "0") +
+                " expectSize=" +
+                std::to_string(SafeGetCallbackSize(reinterpret_cast<CallbackBaseShim*>(callResult))) +
+                " dataSize=" +
+                (resultIt != g_Results.end() ? std::to_string(resultIt->Data.size()) : std::string("-")));
+        }
+
         if (resultIt != g_Results.end() && resultIt->CallbackID == 2101)
         {
             Logger::Info(
@@ -505,6 +522,19 @@ namespace SteamCallResultManager
 
             MarkCallResultUnregistered(dispatch.Callback);
             const bool dispatched = DispatchCallResult(dispatch.Callback, dispatch.Call, dispatch.Data);
+
+            if (dispatch.CallbackID != 2101)
+            {
+                Logger::Info(
+                    "CallResult dispatched call=" +
+                    std::to_string(static_cast<unsigned long long>(dispatch.Call)) +
+                    " callbackID=" +
+                    std::to_string(dispatch.CallbackID) +
+                    " bytes=" +
+                    std::to_string(static_cast<unsigned long long>(dispatch.Data.size())) +
+                    " success=" +
+                    (dispatched ? "1" : "0"));
+            }
 
             if (dispatch.CallbackID == 2101)
             {
