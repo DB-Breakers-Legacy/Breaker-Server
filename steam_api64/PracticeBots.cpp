@@ -286,7 +286,10 @@ namespace
         if (IsCharacter(self))
         {
             const std::uint32_t slot = At<std::uint32_t>(self + kCharSlot);
-            if (slot < kSlotCount && (g_BotSlotMask & (1u << slot)) != 0 &&
+            // Only once the brain's movement controller exists (AI+0xA0): the tutorial mode makes it on the
+            // first movement order, and the character update reads AI+0xA0 -> +0x28 without a null check
+            // (crash 2026-11-11 at 0x1402184D2 when the mode was cleared on the very first frame).
+            if (slot < kSlotCount && (g_BotSlotMask & (1u << slot)) != 0 && At<std::uintptr_t>(ai + 0xA0) != 0 &&
                 (At<std::int32_t>(ai + 0x1780) != -1 || At<std::int32_t>(ai + 0x1788) != -1))
             {
                 At<std::int32_t>(ai + 0x1780) = -1;
