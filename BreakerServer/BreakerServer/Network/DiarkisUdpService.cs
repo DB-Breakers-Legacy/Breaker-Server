@@ -734,7 +734,7 @@ public sealed class DiarkisUdpService(
         if ((session.PracticeTrial && battleRoomId is null) || withBots)
         {
             var playerRole = desire["desiredRole"]?.GetValue<int>() ?? 1;
-            foreach (var bot in TrialBots(playerRole))
+            foreach (var bot in TrialBots(playerRole, casual: session.RoomBase == CmdCasualRoom))
                 list.Add(bot.Member);
         }
 
@@ -765,13 +765,17 @@ public sealed class DiarkisUdpService(
     // 0 Raider / 1 Survivor, MATCHMAKING_PROTOCOL.md section 3); the rest are survivors. Member layout as read
     // by the client: userId, userData {userName, userRank, userRivalRank, desiredRole, desiredStageId,
     // platform}, sdpData (JSON text; able_rematch true or the menu blocks start).
-    private static IEnumerable<(string UserId, int Role, JsonObject Member)> TrialBots(int playerRole)
+    // Casual role numbers are 10 Raider / 11 Survivor (live 2026-11-11: desiredRole 11 as survivor); the client
+    // maps 0/10/20 to Raider and 1/11/21 to Survivor (sub_140806820).
+    private static IEnumerable<(string UserId, int Role, JsonObject Member)> TrialBots(int playerRole, bool casual = false)
     {
+        var playerIsRaider = playerRole % 10 == 0;
+        var roleBase = casual ? 10 : 0;
         for (var i = 1; i <= 7; i++)
         {
             var userId = $"BOT{i:D29}";
             var name = $"BOT {i}";
-            var role = i == 1 && playerRole != 0 ? 0 : 1;
+            var role = roleBase + (i == 1 && !playerIsRaider ? 0 : 1);
             var sdp = new JsonObject
             {
                 ["player_level"] = 1,
@@ -779,7 +783,7 @@ public sealed class DiarkisUdpService(
                 ["p2p_uid"] = userId,
                 ["platform"] = 3,
                 ["pf_uid"] = "0",
-                ["patroller_name"] = role == 0 ? "RAIDER" : "SURVIVOR",
+                ["patroller_name"] = role % 10 == 0 ? "RAIDER" : "SURVIVOR",
                 ["account_name"] = name,
                 ["able_rematch"] = true,
                 ["prac_update"] = false,
