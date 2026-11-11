@@ -1,5 +1,9 @@
+using MessagePack;
 using BreakerServer.Configuration;
 using BreakerServer.Protocol.Diarkis;
+using BreakerServer.Protocol.Game;
+using System.Text.Json;
+using System.Text.Json.Nodes;
 using BreakerServer.Services;
 using Microsoft.Extensions.Options;
 using System.Net;
@@ -41,6 +45,7 @@ public sealed class DiarkisUdpService(
     private const ushort CmdUdpNotifyHolePunchDone = 0x0130;    // 304 client -> server: punch done
     private const ushort CmdUdpCheckNatType = 0x0131;           // 305 client -> server (16 zero bytes)
     private const ushort CmdConnectionRoomProbe = 0x55F0;
+    private const ushort CmdPracticeRoom = 32000;                // 0x7D00, game messages 32xxx -> 33xxx
     // Captures show exactly two hole-punch requests per matching session (UdpPort, then UdpSessionPort).
     // Answering every "done" with a new request loops forever (seen live on 2026-11-10).
     private const int HolePunchRequestsPerSession = 2;
@@ -57,6 +62,7 @@ public sealed class DiarkisUdpService(
         public FragmentReassembler Fragments { get; } = new();
         public bool Bootstrapped;
         public int HolePunchRequests;
+        public string? PracticeRoomId;
         public string? ClientPublicAddress;
         public string? ClientLanAddress;
     }
@@ -335,11 +341,15 @@ public sealed class DiarkisUdpService(
                 await SendDatAsync(udp, session, CmdRedirect, 0, 0xFF,
                     [.. RedirectMarker, .. Encoding.ASCII.GetBytes(MatchingAddress)], ct);
                 return;
+            case CmdPracticeRoom:
+                await HandlePracticeRoomAsync(udp, session, version, plaintext, ct);
+                return;
             default:
                 logger.LogInformation(
                     "Diarkis {Listener} unhandled cmd=0x{Command:X4} ver={Version} bytes={Length} preview={Preview}",
                     _name, command, version, plaintext.Length,
                     Convert.ToHexString(plaintext.AsSpan(0, Math.Min(plaintext.Length, 96))));
+                CaptureCommand(command, version, plaintext);
                 return;
         }
     }
@@ -399,6 +409,80 @@ public sealed class DiarkisUdpService(
         {
             return false;
         }
+    }
+
+    // Research aid: with BREAKER_CAPTURE_DIR set, unhandled commands are saved whole (decrypted).
+    private void CaptureCommand(ushort command, byte version, byte[] plaintext)
+    {
+        var directory = Environment.GetEnvironmentVariable("BREAKER_CAPTURE_DIR");
+        if (string.IsNullOrWhiteSpace(directory))
+            return;
+        try
+        {
+            Directory.CreateDirectory(directory);
+            File.WriteAllBytes(Path.Combine(directory,
+                $"{DateTime.Now:HHmmss}_udp_{_name}_cmd{command:X4}_v{version}_{Guid.NewGuid():N}.bin"), plaintext);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            logger.LogWarning(ex, "Command capture failed");
+        }
+    }
+
+    // --- practice room (first cut, 2026-11-10) ---
+    // Request ids 32xxx, replies 33xxx (= request + 1000), fields from docs/protocol MATCHMAKING_PROTOCOL.md
+    // section 5/6. Replies go back as the same Diarkis command, status 1, no 4-byte prefix (to be confirmed live).
+    private int _roomCounter;
+
+    private async Task HandlePracticeRoomAsync(UdpClient udp, Session session, byte version, byte[] plaintext, CancellationToken ct)
+    {
+        CaptureCommand(CmdPracticeRoom, version, plaintext);
+        GameMessage request;
+        try
+        {
+            request = GameMessage.Parse(plaintext);
+        }
+        catch (Exception ex) when (ex is InvalidDataException or MessagePackSerializationException)
+        {
+            logger.LogWarning(ex, "Diarkis {Listener} practice: unreadable game message", _name);
+            return;
+        }
+
+        logger.LogInformation("Practice request id={Id} serial={Serial} headerId={HeaderId} data={Data}",
+            request.Id, request.Serial, request.HeaderMessageId, request.Data);
+
+        JsonObject body;
+        try { body = JsonNode.Parse(request.Data) as JsonObject ?? []; }
+        catch (JsonException) { body = []; }
+
+        var reply = new JsonObject { ["status"] = 0 };
+        switch (request.Id)
+        {
+            case 32000: // PracticeRoomCreate -> 33000
+            case 32001: // PracticeRoomJoin -> 33001
+                session.PracticeRoomId ??= $"practice{Interlocked.Increment(ref _roomCounter):D6}";
+                reply["roomId"] = session.PracticeRoomId;
+                reply["roomKey"] = "0000";
+                reply["roomData"] = new JsonObject { ["gameRule"] = body["gameRule"]?.GetValue<int>() ?? 0 };
+                reply["rivalBot"] = 1;
+                reply["normalRule"] = 1;
+                reply["coolDown"] = 1;
+                break;
+            case 32006: // PracticeRoomDataGet -> 33006
+                reply["roomData"] = new JsonObject { ["gameRule"] = 0 };
+                break;
+            case 32008: // PracticeRoomOwnerGet -> 33008
+                reply["roomId"] = session.PracticeRoomId ?? string.Empty;
+                break;
+            case 32017: // PracticeRoomOpen -> 33017
+                reply["battleRoomId"] = $"{session.PracticeRoomId ?? "practice"}-battle";
+                break;
+        }
+
+        var replyId = request.Id + 1000;
+        var json = reply.ToJsonString();
+        logger.LogInformation("Practice reply id={Id} data={Data}", replyId, json);
+        await SendDatAsync(udp, session, CmdPracticeRoom, version, 0x01, request.Reply(replyId, json), ct);
     }
 
     // --- clear-text 0x0C0C directory ---
