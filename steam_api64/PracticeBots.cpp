@@ -101,17 +101,16 @@ namespace
             " kind=" + std::to_string(At<std::uint32_t>(slot + kSlotKind)) + ")");
     }
 
-    // practice_raider_bot=0: the lobby's "no player is the Raider -> add the Raider bot" step is skipped,
-    // so the practice match has no Raider at all (experimental; for testing survivor bots on their own).
+    // practice_raider_bot=0: the Raider bot is still added, but switched off - the same state the game uses
+    // when the practice "rival bot" rule is off (sub_1408BF360 a5 = 1 -> slot +0xD04 = 1, AI mode 0), so it
+    // stands at its spawn. A match with no Raider at all crashes while loading (2026-11-11: divide by zero at
+    // 0x14028668E in sub_1402863B0, which spreads items over the Raider list).
     void __fastcall AddRaiderBotDetour(
         std::uintptr_t slots, std::uint32_t slotIndex, std::uint32_t a3, std::uint8_t a4, std::uint8_t a5)
     {
-        if (!g_RaiderBot)
-        {
-            Logger::Info("PracticeBots: Raider bot skipped (practice_raider_bot=0)");
-            return;
-        }
-        g_OriginalAddRaiderBot(slots, slotIndex, a3, a4, a5);
+        NSR_UNUSED(a5);
+        g_OriginalAddRaiderBot(slots, slotIndex, a3, a4, 1);
+        Logger::Info("PracticeBots: Raider bot added switched off (practice_raider_bot=0)");
     }
 
     // The lobby phase function runs every frame; the match starts in the call that sets +0x308 to 16.
@@ -202,8 +201,8 @@ bool PracticeBots::Init()
     if (!g_RaiderBot)
     {
         raider = Hook(kAddRaiderBotRva, reinterpret_cast<void*>(&AddRaiderBotDetour),
-            reinterpret_cast<void**>(&g_OriginalAddRaiderBot), &g_AddRaiderBotTarget, "sub_1408BF360 (skip Raider bot)");
-        Logger::Info("PracticeBots: practice matches without the Raider bot (practice_raider_bot=0)");
+            reinterpret_cast<void**>(&g_OriginalAddRaiderBot), &g_AddRaiderBotTarget, "sub_1408BF360 (Raider bot off)");
+        Logger::Info("PracticeBots: practice Raider bot switched off (practice_raider_bot=0)");
     }
     return guard && add && raider;
 }
