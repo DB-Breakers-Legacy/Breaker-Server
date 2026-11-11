@@ -212,6 +212,7 @@
     <ClInclude Include="NetworkHooks.h" />
     <ClInclude Include="OnlineCheckBypass.h" />
     <ClInclude Include="PracticeBots.h" />
+    <ClInclude Include="LobbyMap.h" />
     <ClInclude Include="sdk_includes\isteamapplist.h" />
     <ClInclude Include="sdk_includes\isteamapps.h" />
     <ClInclude Include="sdk_includes\isteamapps001.h" />
@@ -458,6 +459,7 @@
     <ClCompile Include="NetworkHooks.cpp" />
     <ClCompile Include="OnlineCheckBypass.cpp" />
     <ClCompile Include="PracticeBots.cpp" />
+    <ClCompile Include="LobbyMap.cpp" />
     <ClCompile Include="Auth\SteamAuth.cpp" />
     <ClCompile Include="Auth\LocalAuthTicket.cpp" />
     <ClCompile Include="Auth\AuthTicketRegistry.cpp" />
