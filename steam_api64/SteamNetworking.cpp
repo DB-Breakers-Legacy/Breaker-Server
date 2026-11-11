@@ -586,6 +586,7 @@ public:
     }
 };
 
+// Vtable-backed versions of the next three live in SteamNetworkingInterfaces.cpp.
 class BreakersSteamNetworkingMessages
 {
 public:
@@ -636,9 +637,6 @@ public:
 };
 
 static BreakersSteamNetworking g_Networking;
-static BreakersSteamNetworkingMessages g_Messages;
-static BreakersSteamNetworkingSockets g_Sockets;
-static BreakersSteamNetworkingUtils g_Utils;
 
 extern "C" void* __cdecl BreakersRevived_SteamNetworking()
 {
@@ -652,26 +650,14 @@ extern "C" void* __cdecl BreakersRevived_SteamGameServerNetworking()
     return &g_Networking;
 }
 
-extern "C" void* __cdecl BreakersRevived_SteamNetworkingMessages()
+
+// Logging bridge for SteamNetworkingInterfaces.cpp, which cannot include StdInc.h (SDK type clash).
+void BreakersNetLog(const char* message)
 {
-    SteamVersionLogger::LogInterfaceRequest("BreakersRevived_SteamNetworkingMessages", "SteamNetworkingMessages002");
-    return &g_Messages;
+    Logger::Info(message ? message : "");
 }
 
-extern "C" void* __cdecl BreakersRevived_SteamNetworkingSockets()
+void BreakersNetLogInterface(const char* accessor, const char* version)
 {
-    SteamVersionLogger::LogInterfaceRequest("BreakersRevived_SteamNetworkingSockets", "SteamNetworkingSockets012");
-    return &g_Sockets;
-}
-
-extern "C" void* __cdecl BreakersRevived_SteamGameServerNetworkingSockets()
-{
-    SteamVersionLogger::LogInterfaceRequest("BreakersRevived_SteamGameServerNetworkingSockets", "SteamNetworkingSockets012");
-    return &g_Sockets;
-}
-
-extern "C" void* __cdecl BreakersRevived_SteamNetworkingUtils()
-{
-    SteamVersionLogger::LogInterfaceRequest("BreakersRevived_SteamNetworkingUtils", "SteamNetworkingUtils004");
-    return &g_Utils;
+    SteamVersionLogger::LogInterfaceRequest(accessor ? accessor : "", version ? version : "");
 }

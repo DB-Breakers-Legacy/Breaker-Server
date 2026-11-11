@@ -1,4 +1,4 @@
-<?xml version='1.0' encoding='utf-8'?>
+﻿<?xml version='1.0' encoding='utf-8'?>
 <Project xmlns="http://schemas.microsoft.com/developer/msbuild/2003" DefaultTargets="Build">
   <ItemGroup Label="ProjectConfigurations">
     <ProjectConfiguration Include="Debug|Win32">
@@ -471,6 +471,7 @@
     <ClCompile Include="SteamInterfaceRouter.cpp" />
     <ClCompile Include="SteamLobbyManager.cpp" />
     <ClCompile Include="SteamNetworking.cpp" />
+    <ClCompile Include="SteamNetworkingInterfaces.cpp" />
     <ClCompile Include="SteamOfflineServer.cpp" />
     <ClCompile Include="SteamP2PManager.cpp" />
     <ClCompile Include="SteamPacketLogger.cpp" />
