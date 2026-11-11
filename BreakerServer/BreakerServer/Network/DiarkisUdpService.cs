@@ -532,6 +532,29 @@ public sealed class DiarkisUdpService(
             await SendDatAsync(udp, session, CmdPracticeRoom, version, 0x01, request.Reply(32101, membersJson), ct);
         }
 
+        // After the owner sets the practice rules (32026): echo them to the room (32126 ChangePracticeRule)
+        // and tell the owner the room may be opened (32120 ProtocolNotifyPracticeCanOpen {roomId}).
+        // Live test 2026-11-10: in the practice lobby with the Join module finished and the Open module
+        // idle, the only menu option was "display room key" - no start. Possible_: 32120 enables start.
+        if (request.Id == 32026)
+        {
+            var roomId = session.PracticeRoomId ?? string.Empty;
+            var rule = new JsonObject
+            {
+                ["roomId"] = roomId,
+                ["rivalBot"] = body["rivalBot"]?.GetValue<int>() ?? 1,
+                ["normalRule"] = body["normalRule"]?.GetValue<int>() ?? 0,
+                ["coolDown"] = body["coolDown"]?.GetValue<int>() ?? 0,
+            };
+            var ruleJson = rule.ToJsonString();
+            logger.LogInformation("Practice push id=32126 data={Data}", ruleJson);
+            await SendDatAsync(udp, session, CmdPracticeRoom, version, 0x01, request.Reply(32126, ruleJson), ct);
+
+            var canOpenJson = new JsonObject { ["roomId"] = roomId }.ToJsonString();
+            logger.LogInformation("Practice push id=32120 data={Data}", canOpenJson);
+            await SendDatAsync(udp, session, CmdPracticeRoom, version, 0x01, request.Reply(32120, canOpenJson), ct);
+        }
+
         // Practice against the bot has no other players to wait for: once the room is opened (32017),
         // tell the client the match is found (32105 ProtocolNotifyPracticeRoomOnMatchingComplete).
         // Rules (MATCHMAKING_PROTOCOL.md section 8): all five keys present; roleList entries {userId, role}
