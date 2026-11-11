@@ -167,6 +167,13 @@ namespace
         return At<std::uintptr_t>(g_Base + kCharacterTableRva + static_cast<std::uintptr_t>(handle) * 16);
     }
 
+    std::string ClassRva(std::uintptr_t object)
+    {
+        if (object == 0)
+            return "none";
+        return Hex(At<std::uintptr_t>(object) - g_Base + 0x140000000);
+    }
+
     bool IsCharacter(std::uintptr_t c)
     {
         if (c == 0)
@@ -175,33 +182,107 @@ namespace
         return vtable == g_Base + kMobVftableRva || vtable == g_Base + kRivalVftableRva;
     }
 
-    // The local player's character: cached handle, re-found by scanning the table when it stops matching.
+    // The local player's character, from the game's own slot lookup sub_140751860(slots+0x6830, slot), and its
+    // handle in the object table (found by its exact address; cached). Characters keep -1 at +0x48, so the
+    // handle cannot be read from the character itself.
+    constexpr std::uintptr_t kCharacterBySlotRva = 0x751860;   // sub_140751860(manager, slot) -> UnitCharacter*
+    constexpr std::uintptr_t kCharacterManager = 0x6830;       // slots + 0x6830
+    constexpr std::uintptr_t kHandleMoveRva = 0x7E830;         // sub_14007E830(dst, &src): counted handle move
+    using CharacterBySlotFn = std::uintptr_t(__fastcall*)(std::uintptr_t, std::uint64_t);
+    using HandleMoveFn = std::uintptr_t(__fastcall*)(std::uint32_t*, std::uint32_t*);
+
     std::uintptr_t FindPlayer()
     {
         const std::uintptr_t slots = At<std::uintptr_t>(g_Base + kGameGlobalPtrRva);
-        if (slots == 0)
+        if (slots == 0 || At<std::uintptr_t>(slots + kCharacterManager) == 0)
             return 0;
         const std::uint32_t playerSlot = At<std::uint32_t>(slots + kLocalPlayerSlot);
-        std::uintptr_t player = CharacterAt(g_PlayerHandle);
-        if (IsCharacter(player) && At<std::uint32_t>(player + kCharSlot) == playerSlot)
+        const auto bySlot = reinterpret_cast<CharacterBySlotFn>(g_Base + kCharacterBySlotRva);
+        const std::uintptr_t player = bySlot(At<std::uintptr_t>(slots + kCharacterManager), playerSlot);
+        if (player == 0)
+            return 0;
+        if (CharacterAt(g_PlayerHandle) == player)
             return player;
 
         for (std::uint32_t h = 1; h < kCharacterTableSize; ++h)
         {
-            const std::uintptr_t c = CharacterAt(h);
-            if (IsCharacter(c) && At<std::uint32_t>(c + kCharSlot) == playerSlot)
+            if (CharacterAt(h) == player)
             {
                 g_PlayerHandle = h;
                 Logger::Info("PracticeBots: player character handle " + std::to_string(h) +
-                    " (slot " + std::to_string(playerSlot) + ")");
-                return c;
+                    " (slot " + std::to_string(playerSlot) + ", " + ClassRva(player) + ")");
+                Logger::Flush();
+                return player;
             }
         }
+        g_PlayerHandle = 0;
         return 0;
+    }
+
+    // Store a handle in an AI field the way the game does: take one reference on the table entry
+    // (entry +8 is the count, cf. sub_140682C20), then move it in with sub_14007E830, which releases the old one.
+    void AssignHandle(std::uintptr_t field, std::uint32_t handle)
+    {
+        if (At<std::uint32_t>(field) == handle)
+            return;
+        auto* count = reinterpret_cast<volatile long*>(g_Base + kCharacterTableRva + static_cast<std::uintptr_t>(handle) * 16 + 8);
+        InterlockedIncrement(count);
+        std::uint32_t temp = handle;
+        reinterpret_cast<HandleMoveFn>(g_Base + kHandleMoveRva)(reinterpret_cast<std::uint32_t*>(field), &temp);
+    }
+
+    // Bot status report (survivor_bot_trace=1): every 2 s per bot, what its brain and current action are doing.
+    // SimpleAI: +0x18 current action. Interact action (SimpleAIActionOrientationInteract): +0x1700 step,
+    // +0x1704 result (1 running, 2 failed, 3 done), +0x170C seconds in the action, +0x1790 target kind,
+    // +0x1794 target object handle (object +0x178 = object type, read by sub_1402BA1E0).
+    bool g_Trace = false;
+    std::unordered_map<std::uintptr_t, std::uint64_t> g_LastTrace;
+
+
+    void TraceBot(std::uintptr_t ai, std::uintptr_t bot)
+    {
+        const std::uint64_t now = GetTickCount64();
+        auto& last = g_LastTrace[ai];
+        if (now - last < 2000)
+            return;
+        last = now;
+
+        std::ostringstream line;
+        line << "PracticeBots trace: slot " << At<std::uint32_t>(bot + kCharSlot)
+             << " state=" << Hex(At<std::uint32_t>(ai + kAiState))
+             << " next=" << Hex(At<std::uint32_t>(ai + kAiNextState))
+             << " mode=" << At<std::int32_t>(ai + 0x1780)
+             << " mask=" << Hex(At<std::uint32_t>(ai + 0x1790))
+             << " follow=" << At<std::int32_t>(ai + kAiFollowTarget)
+             << " downed=" << ((At<std::uint32_t>(bot + kCharFlags) & 0x20000000) != 0);
+
+        const std::uintptr_t action = At<std::uintptr_t>(ai + 0x18);
+        line << " action=" << ClassRva(action);
+        if (action != 0 && At<std::uintptr_t>(action) == g_Base + 0x11AD298)   // SimpleAIActionOrientationInteract
+        {
+            const std::uint32_t target = At<std::uint32_t>(action + 0x1794);
+            const std::uintptr_t object = CharacterAt(target);
+            line << " interact{step=" << At<std::uint32_t>(action + 0x1700)
+                 << " result=" << At<std::uint32_t>(action + 0x1704)
+                 << " t=" << At<float>(action + 0x170C)
+                 << " kind=" << At<std::uint32_t>(action + 0x1790)
+                 << " target=" << target << " class=" << ClassRva(object);
+            if (object != 0)
+                line << " type=" << At<std::uint32_t>(object + 0x178);
+            line << "}";
+        }
+        Logger::Info(line.str());
+        Logger::Flush();
     }
 
     std::uint64_t __fastcall AiUpdateDetour(std::uintptr_t ai, float dt)
     {
+        if (g_Trace)
+        {
+            const std::uintptr_t self = CharacterAt(At<std::uint32_t>(ai + kAiCharacterHandle));
+            if (IsCharacter(self))
+                TraceBot(ai, self);
+        }
         if (g_FollowerSlot < kSlotCount)
         {
             const std::uintptr_t bot = CharacterAt(At<std::uint32_t>(ai + kAiCharacterHandle));
@@ -219,7 +300,7 @@ namespace
                     if (dx * dx + dy * dy + dz * dz > kFollowDistance * kFollowDistance &&
                         state != kStateFollow && state != kStateDowned && next < 0)
                     {
-                        At<std::uint32_t>(ai + kAiFollowTarget) = g_PlayerHandle;
+                        AssignHandle(ai + kAiFollowTarget, g_PlayerHandle);
                         At<std::uint32_t>(ai + kAiNextState) = kStateFollow;
                     }
                 }
@@ -378,8 +459,12 @@ bool PracticeBots::Init()
     const bool add = Hook(kLobbyStartRva, reinterpret_cast<void*>(&LobbyStartDetour),
         reinterpret_cast<void**>(&g_OriginalLobbyStart), &g_LobbyStartTarget, "sub_14067B260 (lobby match start)");
 
+    g_Trace = GetPrivateProfileIntA("steam", "survivor_bot_trace", 0, SteamConfig::GetPath().c_str()) != 0;
+    if (g_Trace)
+        Logger::Info("PracticeBots: bot status trace on (every 2 s per bot)");
+
     bool follow = true;
-    if (g_FollowerBot > 0)
+    if (g_FollowerBot > 0 || g_Trace)
         follow = Hook(kAiUpdateRva, reinterpret_cast<void*>(&AiUpdateDetour),
             reinterpret_cast<void**>(&g_OriginalAiUpdate), &g_AiUpdateTarget, "0x1402BE6E0 (tutorial AI update, follower)");
 
