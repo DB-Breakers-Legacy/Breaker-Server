@@ -63,7 +63,10 @@ namespace
     constexpr std::uint32_t kStateDowned = 0x2738;
     constexpr std::uintptr_t kCharSlot = 0x1F4;                 // player slot (UnitCharacter ctor arg)
     constexpr std::uintptr_t kCharRole = 0x204;                 // 0 survivor, 1 raider
-    constexpr std::uintptr_t kCharHandle = 0x48;                // own handle in the table
+    // Real characters only: the handle table also holds items, pods, vendors... whose fields at +0x1F4 can
+    // look like a slot number (2026-11-11: an item was taken for the player and the game crashed).
+    constexpr std::uintptr_t kMobVftableRva = 0x11787A0;        // XG::Game::Mob (survivors, player and bots)
+    constexpr std::uintptr_t kRivalVftableRva = 0x1177F40;      // XG::Game::BattleRival (the Raider)
     constexpr std::uintptr_t kCharPosition = 0x60;              // x, y, z floats
     constexpr std::uintptr_t kCharFlags = 0xA18;                // 0x20000000 = downed
     constexpr float kFollowDistance = 5.0f;
@@ -164,6 +167,14 @@ namespace
         return At<std::uintptr_t>(g_Base + kCharacterTableRva + static_cast<std::uintptr_t>(handle) * 16);
     }
 
+    bool IsCharacter(std::uintptr_t c)
+    {
+        if (c == 0)
+            return false;
+        const std::uintptr_t vtable = At<std::uintptr_t>(c);
+        return vtable == g_Base + kMobVftableRva || vtable == g_Base + kRivalVftableRva;
+    }
+
     // The local player's character: cached handle, re-found by scanning the table when it stops matching.
     std::uintptr_t FindPlayer()
     {
@@ -172,13 +183,13 @@ namespace
             return 0;
         const std::uint32_t playerSlot = At<std::uint32_t>(slots + kLocalPlayerSlot);
         std::uintptr_t player = CharacterAt(g_PlayerHandle);
-        if (player != 0 && At<std::uint32_t>(player + kCharSlot) == playerSlot)
+        if (IsCharacter(player) && At<std::uint32_t>(player + kCharSlot) == playerSlot)
             return player;
 
         for (std::uint32_t h = 1; h < kCharacterTableSize; ++h)
         {
             const std::uintptr_t c = CharacterAt(h);
-            if (c != 0 && At<std::uint32_t>(c + kCharHandle) == h && At<std::uint32_t>(c + kCharSlot) == playerSlot)
+            if (IsCharacter(c) && At<std::uint32_t>(c + kCharSlot) == playerSlot)
             {
                 g_PlayerHandle = h;
                 Logger::Info("PracticeBots: player character handle " + std::to_string(h) +
@@ -194,7 +205,7 @@ namespace
         if (g_FollowerSlot < kSlotCount)
         {
             const std::uintptr_t bot = CharacterAt(At<std::uint32_t>(ai + kAiCharacterHandle));
-            if (bot != 0 && At<std::uint32_t>(bot + kCharSlot) == g_FollowerSlot &&
+            if (IsCharacter(bot) && At<std::uint32_t>(bot + kCharSlot) == g_FollowerSlot &&
                 (At<std::uint32_t>(bot + kCharFlags) & 0x20000000) == 0)
             {
                 const std::uintptr_t player = FindPlayer();
