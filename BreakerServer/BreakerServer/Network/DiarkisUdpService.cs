@@ -46,6 +46,7 @@ public sealed class DiarkisUdpService(
     private const ushort CmdUdpCheckNatType = 0x0131;           // 305 client -> server (16 zero bytes)
     private const ushort CmdConnectionRoomProbe = 0x55F0;
     private const ushort CmdPracticeRoom = 32000;                // 0x7D00, game messages 32xxx -> 33xxx
+    private const ushort CmdPracticeConnection = 42000;          // 0xA410, connection room 42xxx -> 43xxx (session listener)
     // Captures show exactly two hole-punch requests per matching session (UdpPort, then UdpSessionPort).
     // Answering every "done" with a new request loops forever (seen live on 2026-11-10).
     private const int HolePunchRequestsPerSession = 2;
@@ -351,6 +352,9 @@ public sealed class DiarkisUdpService(
             case CmdPracticeRoom:
                 await HandlePracticeRoomAsync(udp, session, version, plaintext, ct);
                 return;
+            case CmdPracticeConnection:
+                await HandlePracticeConnectionAsync(udp, session, version, plaintext, ct);
+                return;
             default:
                 logger.LogInformation(
                     "Diarkis {Listener} unhandled cmd=0x{Command:X4} ver={Version} bytes={Length} preview={Preview}",
@@ -566,6 +570,62 @@ public sealed class DiarkisUdpService(
                 logger.LogInformation("Practice push id=32105 data={Data}", matchedJson);
                 await SendDatAsync(udp, session, CmdPracticeRoom, version, 0x01, request.Reply(32105, matchedJson), ct);
             }, ct);
+        }
+    }
+
+    // --- practice connection room (first cut, 2026-11-10) ---
+    // After match found the client asks battle/get_connection_server_info, connects to the session listener
+    // and sends Diarkis command 42000 (0xA410) with CSMS game messages: 42000 CreateConnectionRoom
+    // {connectionRoomId} (live: the practice roomId) -> 43000 {status, diarkisRoomId}; 42001 Join -> 43001;
+    // 42004 UpdateMatchedSdp {connectionRoomId, sdpData} -> 43004; 42005 CheckBattleFinish -> 43005
+    // {status, userList}. Unanswered 42000 ended in error 330001402 ("room was not made public").
+    // After the player's SDP update, 42100 BattleRoomAllJoined {roomMemberList: [{userId}]} (Possible_ the
+    // signal to start; the bot is not a member).
+    private async Task HandlePracticeConnectionAsync(UdpClient udp, Session session, byte version, byte[] plaintext, CancellationToken ct)
+    {
+        CaptureCommand(CmdPracticeConnection, version, plaintext);
+        GameMessage request;
+        try
+        {
+            request = GameMessage.Parse(plaintext);
+        }
+        catch (Exception ex) when (ex is InvalidDataException or MessagePackSerializationException)
+        {
+            logger.LogWarning(ex, "Diarkis {Listener} connection room: unreadable game message", _name);
+            return;
+        }
+
+        logger.LogInformation("Connection request id={Id} serial={Serial} data={Data}", request.Id, request.Serial, request.Data);
+
+        JsonObject body;
+        try { body = JsonNode.Parse(request.Data) as JsonObject ?? []; }
+        catch (JsonException) { body = []; }
+
+        var reply = new JsonObject { ["status"] = 0 };
+        switch (request.Id)
+        {
+            case 42000:
+            case 42001:
+                reply["diarkisRoomId"] = $"{body["connectionRoomId"]?.GetValue<string>() ?? "practice"}-conn";
+                break;
+            case 42005:
+                reply["userList"] = new JsonArray(new JsonObject { ["userId"] = request.UserId, ["isBattleFinished"] = false });
+                break;
+        }
+
+        var replyId = request.Id + 1000;
+        var json = reply.ToJsonString();
+        logger.LogInformation("Connection reply id={Id} data={Data}", replyId, json);
+        await SendDatAsync(udp, session, CmdPracticeConnection, version, 0x01, request.Reply(replyId, json), ct);
+
+        if (request.Id == 42004)
+        {
+            var joined = new JsonObject
+            {
+                ["roomMemberList"] = new JsonArray(new JsonObject { ["userId"] = request.UserId }),
+            }.ToJsonString();
+            logger.LogInformation("Connection push id=42100 data={Data}", joined);
+            await SendDatAsync(udp, session, CmdPracticeConnection, version, 0x01, request.Reply(42100, joined), ct);
         }
     }
 
