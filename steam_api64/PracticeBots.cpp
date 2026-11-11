@@ -3,6 +3,7 @@
 #include "HookManager.h"
 #include "Logger.h"
 #include "SteamConfig.h"
+#include <intrin.h>
 
 // Experimental: add survivor bots to practice matches (2026-11-11).
 //
@@ -467,6 +468,65 @@ namespace
         Logger::Flush();
     }
 
+    // Normal matchmaking host (casual_bots=1). In a normal match the client treats the Raider in the match-found
+    // role list as the host: sub_140806780 returns the role entry whose category (+0x28, sub_140806820: roles
+    // 0/10/20) is 1, and MatchingSubModuleMatching (0x14081AB50) fails with error 1603 when there is none
+    // (live 2026-11-11, "startup information was not genuine", 320001603). In an autofilled match a survivor
+    // player is alone in the role list and the Raider is a bot added in the match, so the player is made the
+    // host: the find returns the player's own entry (+0x70 = this is me), and sub_14081B8F0 (am I host) says yes.
+    // Only for calls from the matching sub-module (0x1408194F0..0x14081D000), not the tutorial matching module.
+    constexpr std::uintptr_t kFindRaiderEntryRva = 0x806780;   // sub_140806780(roleListHolder) -> entry or 0
+    constexpr std::uintptr_t kIsMatchHostRva = 0x81B8F0;       // sub_14081B8F0(MatchingSubModuleMatching*) -> bool
+    constexpr std::uintptr_t kMatchingCallersBegin = 0x8194F0;
+    constexpr std::uintptr_t kMatchingCallersEnd = 0x81D000;
+    constexpr std::uintptr_t kRoleListHolder = 0x148;          // in MatchingSubModuleMatching
+    constexpr std::uintptr_t kRoleEntryStride = 216;
+
+    using FindRaiderEntryFn = std::uintptr_t(__fastcall*)(std::uintptr_t);
+    using IsMatchHostFn = std::uint8_t(__fastcall*)(std::uintptr_t);
+    FindRaiderEntryFn g_OriginalFindRaiderEntry = nullptr;
+    IsMatchHostFn g_OriginalIsMatchHost = nullptr;
+    void* g_FindRaiderEntryTarget = nullptr;
+    void* g_IsMatchHostTarget = nullptr;
+    bool g_LoggedSoloHost = false;
+
+    std::uintptr_t FindOwnRoleEntry(std::uintptr_t holder)
+    {
+        const auto begin = At<std::uintptr_t>(holder + 0x48);
+        const auto end = At<std::uintptr_t>(holder + 0x50);
+        for (auto e = begin; e != 0 && e < end; e += kRoleEntryStride)
+            if (At<std::uint8_t>(e + 0x70) != 0)
+                return e;
+        return 0;
+    }
+
+    std::uintptr_t __fastcall FindRaiderEntryDetour(std::uintptr_t holder)
+    {
+        const auto found = g_OriginalFindRaiderEntry(holder);
+        if (found != 0)
+            return found;
+        const auto caller = reinterpret_cast<std::uintptr_t>(_ReturnAddress()) - g_Base;
+        if (caller < kMatchingCallersBegin || caller >= kMatchingCallersEnd)
+            return 0;
+        const auto own = FindOwnRoleEntry(holder);
+        if (own != 0 && !g_LoggedSoloHost)
+        {
+            g_LoggedSoloHost = true;
+            Logger::Info("PracticeBots: no Raider in the match-found role list - the player hosts the match");
+            Logger::Flush();
+        }
+        return own;
+    }
+
+    std::uint8_t __fastcall IsMatchHostDetour(std::uintptr_t matching)
+    {
+        const auto host = g_OriginalIsMatchHost(matching);
+        if (host != 0)
+            return host;
+        const auto holder = matching + kRoleListHolder;
+        return g_OriginalFindRaiderEntry(holder) == 0 && FindOwnRoleEntry(holder) != 0 ? 1 : 0;
+    }
+
     bool Hook(std::uintptr_t rva, void* detour, void** original, void** target, const char* name)
     {
         *target = reinterpret_cast<void*>(g_Base + rva);
@@ -518,7 +578,14 @@ bool PracticeBots::Init()
 
     g_CasualBots = GetPrivateProfileIntA("steam", "casual_bots", 0, SteamConfig::GetPath().c_str()) != 0;
     if (g_CasualBots)
+    {
         Logger::Info("PracticeBots: normal matches are filled with bots too (casual_bots=1)");
+        Hook(kFindRaiderEntryRva, reinterpret_cast<void*>(&FindRaiderEntryDetour),
+            reinterpret_cast<void**>(&g_OriginalFindRaiderEntry), &g_FindRaiderEntryTarget, "sub_140806780 (match host = Raider)");
+        if (g_OriginalFindRaiderEntry != nullptr)
+            Hook(kIsMatchHostRva, reinterpret_cast<void*>(&IsMatchHostDetour),
+                reinterpret_cast<void**>(&g_OriginalIsMatchHost), &g_IsMatchHostTarget, "sub_14081B8F0 (am I the match host)");
+    }
     g_FreeMode = GetPrivateProfileIntA("steam", "survivor_bot_free_mode", 0, SteamConfig::GetPath().c_str()) != 0;
     g_Trace = GetPrivateProfileIntA("steam", "survivor_bot_trace", 0, SteamConfig::GetPath().c_str()) != 0;
     if (g_Trace)
@@ -551,6 +618,12 @@ void PracticeBots::Shutdown()
     g_AiUpdateTarget = nullptr;
     if (g_TutorialGetTarget)
         HookManager::Disable(g_TutorialGetTarget);
+    if (g_IsMatchHostTarget)
+        HookManager::Disable(g_IsMatchHostTarget);
+    if (g_FindRaiderEntryTarget)
+        HookManager::Disable(g_FindRaiderEntryTarget);
+    g_IsMatchHostTarget = nullptr;
+    g_FindRaiderEntryTarget = nullptr;
     g_LobbyStartTarget = nullptr;
     g_TutorialGetTarget = nullptr;
 }
