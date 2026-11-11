@@ -60,6 +60,10 @@ namespace
     constexpr std::uintptr_t kAiNextState = 0x178C;
     constexpr std::uintptr_t kAiFollowTarget = 0x184C;
     constexpr std::uint32_t kStateFollow = 0x7530;
+    // Survivor state 10001 (sub_1402C12D0 case 1): approach the character at AI+0x184C - sets the behaviour
+    // mask 0x2FF, walks there with a MoveTarget action (sub_1402BC870 at a point from sub_1402CCBE0), then
+    // switches to 30000 when in range. 30000 alone does not walk (its approach action ends at once).
+    constexpr std::uint32_t kStateApproach = 0x2711;
     constexpr std::uint32_t kStateDowned = 0x2738;
     constexpr std::uintptr_t kCharSlot = 0x1F4;                 // player slot (UnitCharacter ctor arg)
     constexpr std::uintptr_t kCharRole = 0x204;                 // 0 survivor, 1 raider
@@ -90,6 +94,7 @@ namespace
     // approach-a-character action that never finishes) and AI mode 7 mode 3. Our bots get -1 (no tutorial
     // mode): only the free survivor planner runs.
     std::uint8_t g_BotSlotMask = 0;
+    bool g_FreeMode = false;
     int g_FollowerBot = 0;                      // survivor_bot_follow: which bot (1-7) follows the player, 0 = none
     std::uint32_t g_FollowerSlot = 0xFFFFFFFF;   // slot of that bot in the current match
     std::uint32_t g_PlayerHandle = 0;
@@ -289,7 +294,9 @@ namespace
             // Only once the brain's movement controller exists (AI+0xA0): the tutorial mode makes it on the
             // first movement order, and the character update reads AI+0xA0 -> +0x28 without a null check
             // (crash 2026-11-11 at 0x1402184D2 when the mode was cleared on the very first frame).
-            if (slot < kSlotCount && (g_BotSlotMask & (1u << slot)) != 0 && At<std::uintptr_t>(ai + 0xA0) != 0 &&
+            // Off for now (2026-11-11): free mode leaves the behaviour mask empty and the bots idle; tutorial
+            // mode 0 is what runs the planner and picks area objectives. Kept behind survivor_bot_free_mode=1.
+            if (g_FreeMode && slot < kSlotCount && (g_BotSlotMask & (1u << slot)) != 0 && At<std::uintptr_t>(ai + 0xA0) != 0 &&
                 (At<std::int32_t>(ai + 0x1780) != -1 || At<std::int32_t>(ai + 0x1788) != -1))
             {
                 At<std::int32_t>(ai + 0x1780) = -1;
@@ -314,10 +321,10 @@ namespace
                     const std::uint32_t state = At<std::uint32_t>(ai + kAiState);
                     const std::int32_t next = At<std::int32_t>(ai + kAiNextState);
                     if (dx * dx + dy * dy + dz * dz > kFollowDistance * kFollowDistance &&
-                        state != kStateFollow && state != kStateDowned && next < 0)
+                        state != kStateApproach && state != kStateDowned && next < 0)
                     {
                         AssignHandle(ai + kAiFollowTarget, g_PlayerHandle);
-                        At<std::uint32_t>(ai + kAiNextState) = kStateFollow;
+                        At<std::uint32_t>(ai + kAiNextState) = kStateApproach;
                     }
                 }
             }
@@ -477,6 +484,7 @@ bool PracticeBots::Init()
     const bool add = Hook(kLobbyStartRva, reinterpret_cast<void*>(&LobbyStartDetour),
         reinterpret_cast<void**>(&g_OriginalLobbyStart), &g_LobbyStartTarget, "sub_14067B260 (lobby match start)");
 
+    g_FreeMode = GetPrivateProfileIntA("steam", "survivor_bot_free_mode", 0, SteamConfig::GetPath().c_str()) != 0;
     g_Trace = GetPrivateProfileIntA("steam", "survivor_bot_trace", 0, SteamConfig::GetPath().c_str()) != 0;
     if (g_Trace)
         Logger::Info("PracticeBots: bot status trace on (every 2 s per bot)");
