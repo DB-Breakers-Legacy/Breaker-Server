@@ -115,6 +115,26 @@ public sealed class ApiIntegrationTests : IClassFixture<BreakerApiFactory>
         Assert.Equal(HttpStatusCode.BadRequest, missing.StatusCode);
     }
 
+    [Fact]
+    public async Task MatchingServerInfoSendsKeysInClientOrderAndRegistersThem()
+    {
+        // The client reads [host, port, SID, AES key, IV, HMAC key]; the factory configures
+        // IV=01.., AES=02.., SID=03.., HMAC=04.. as a fixed development key set.
+        using var response = await Post(
+            "/dbtb-prd/025348/api/battle/get_diarkis_matching_server_info",
+            AuthenticatedBody(UserId.ToString()));
+        var payload = ObjectTree.List(ObjectTree.List(await ReadResponse(response))[1]);
+        var server = ObjectTree.List(payload[1]);
+
+        Assert.Equal(string.Concat(Enumerable.Repeat("03", 16)), ObjectTree.Text(server[2]));
+        Assert.Equal(string.Concat(Enumerable.Repeat("02", 16)), ObjectTree.Text(server[3]));
+        Assert.Equal(string.Concat(Enumerable.Repeat("01", 16)), ObjectTree.Text(server[4]));
+        Assert.Equal(string.Concat(Enumerable.Repeat("04", 16)), ObjectTree.Text(server[5]));
+
+        var registry = _factory.Services.GetRequiredService<BreakerServer.Services.SessionKeyRegistry>();
+        Assert.True(registry.TryGet(ObjectTree.Text(server[2]), out _));
+    }
+
     private async Task<string> Authenticate(long numericId, long ticketUserId)
     {
         using var response = await Post("/025348/api/user/auth", AuthBody(numericId, ticketUserId));

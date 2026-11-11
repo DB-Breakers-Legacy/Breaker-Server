@@ -221,21 +221,34 @@ public static class ApiEndpoints
 
         api.MapPost("/battle/get_diarkis_matching_server_info", (
             ApiResponseService responses,
+            SessionKeyRegistry registry,
             IOptions<BreakerOptions> options) =>
-            responses.Respond(new object?[]
+        {
+            // Fresh key set per session (as the official server and the Python reference do), registered so
+            // the matching UDP listener can find it by SID. Wire order: SID, AES key, IV, HMAC key.
+            // If all four Diarkis keys are configured, that fixed set is used instead (development override).
+            var keys = options.Value.HasFixedDiarkisKeys
+                ? registry.Register(new SessionKeys(
+                    options.Value.DiarkisSidKey,
+                    options.Value.DiarkisAesKey,
+                    options.Value.DiarkisIvKey,
+                    options.Value.DiarkisHashKey))
+                : registry.Create();
+            return responses.Respond(new object?[]
             {
                 0,
                 new object?[]
                 {
                     options.Value.UdpHost,
                     options.Value.UdpPort,
-                    options.Value.DiarkisIvKey.ToLowerInvariant(),
-                    options.Value.DiarkisAesKey.ToLowerInvariant(),
-                    options.Value.DiarkisSidKey.ToLowerInvariant(),
-                    options.Value.DiarkisHashKey.ToLowerInvariant()
+                    keys.Sid,
+                    keys.Aes,
+                    keys.Iv,
+                    keys.Mac
                 },
                 new object?[] { 1, 1 }
-            }));
+            });
+        });
 
         api.MapPost("/message/get_message_list", async (
             HttpRequest request,

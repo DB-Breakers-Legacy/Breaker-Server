@@ -41,12 +41,12 @@ public static class SecureEnvelope
     {
         Validate(keys);
 
-        // The client always allocates one full CBC padding block when the
-        // plaintext is already block-aligned.
+        // Zero padding up to the next 16 bytes, with a full extra block when the data is already
+        // aligned (the client sizes the buffer this way in 0x140DFA190; its AES engine at 0x140E0F040
+        // runs raw CBC and writes no padding bytes of its own). The length field carries the real size.
         var padding = BlockSize - (plaintext.Length & (BlockSize - 1));
         var padded = new byte[plaintext.Length + padding];
         plaintext.CopyTo(padded);
-        padded.AsSpan(plaintext.Length).Fill((byte)padding);
 
         byte[] ciphertext;
         using (var aes = Aes.Create())
@@ -115,20 +115,20 @@ public static class SecureEnvelope
         if (padded.Length == 0)
             return new(plaintextLength, null, true, false, "empty decrypted buffer");
 
-        var padding = padded[^1];
-        if (padding is 0 or > BlockSize || padding > padded.Length)
-            return new(plaintextLength, null, true, false, $"invalid CBC padding value={padding}");
-
-        for (var i = padded.Length - padding; i < padded.Length; i++)
+        // The HMAC already proved the ciphertext is intact, so the length field is trusted.
+        // Zero length: the content runs to the last non-zero byte (seen in captures).
+        if (plaintextLength == 0)
         {
-            if (padded[i] != padding)
-                return new(plaintextLength, null, true, false, "invalid CBC padding bytes");
+            var end = padded.Length;
+            while (end > 0 && padded[end - 1] == 0) end--;
+            return new(0, padded[..end], true, true, end == 0 ? string.Empty : "zero length field, content trimmed");
         }
 
-        var unpaddedLength = padded.Length - padding;
-        if (plaintextLength != unpaddedLength)
-            return new(plaintextLength, null, true, true, $"payload size mismatch expected={plaintextLength} actual={unpaddedLength}");
+        if (plaintextLength > padded.Length)
+            return new(plaintextLength, null, true, false, $"length field {plaintextLength} exceeds decrypted size {padded.Length}");
 
-        return new(plaintextLength, padded[..unpaddedLength], true, true, string.Empty);
+        var tailIsZero = padded.AsSpan(plaintextLength).IndexOfAnyExcept((byte)0) < 0;
+        return new(plaintextLength, padded[..plaintextLength], true, tailIsZero,
+            tailIsZero ? string.Empty : "non-zero padding after the declared length");
     }
 }

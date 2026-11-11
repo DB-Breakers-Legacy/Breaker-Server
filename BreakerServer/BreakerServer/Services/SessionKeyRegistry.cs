@@ -31,6 +31,20 @@ public sealed class SessionKeyRegistry(TimeProvider? clock = null)
         return keys;
     }
 
+    /// <summary>
+    /// Registers a fixed key set (development override from configuration) so the UDP services can
+    /// resolve it by SID like an issued one. Re-registering refreshes its lifetime.
+    /// </summary>
+    public SessionKeys Register(SessionKeys keys)
+    {
+        var normalized = new SessionKeys(
+            keys.Sid.ToLowerInvariant(), keys.Aes.ToLowerInvariant(), keys.Iv.ToLowerInvariant(), keys.Mac.ToLowerInvariant());
+        SecureEnvelope.FromHex(normalized.Sid, normalized.Aes, normalized.Iv, normalized.Mac);
+        var now = _clock.GetUtcNow();
+        _keys[normalized.Sid] = new Entry(normalized, now, now.Add(Lifetime));
+        return normalized;
+    }
+
     public bool TryGet(string sid, out SessionKeys? keys)
     {
         keys = null;

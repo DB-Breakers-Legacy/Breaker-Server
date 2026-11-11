@@ -14,7 +14,9 @@ builder.WebHost.ConfigureKestrel(options =>
 
 builder.Services.AddOptions<BreakerOptions>()
     .Bind(builder.Configuration.GetSection(BreakerOptions.SectionName))
-    .Validate(HasValidDiarkisKeys, "Breaker Diarkis keys must be configured as hexadecimal strings with valid lengths.")
+    .PostConfigure(options =>
+        options.StunPorts = options.StunPorts.Length == 0 ? [3478, 3479] : options.StunPorts.Distinct().ToArray())
+    .Validate(HasValidDiarkisKeys, "Breaker Diarkis keys are optional, but if any is set all four must be hexadecimal strings with valid lengths.")
     .ValidateOnStart();
 builder.Services.AddDbContext<BreakerDbContext>(options =>
     options.UseSqlite(builder.Configuration.GetConnectionString("Breaker") ?? "Data Source=breaker.db"));
@@ -23,10 +25,14 @@ builder.Services.AddSingleton<StarterDataStore>();
 builder.Services.AddSingleton<SessionTokenService>();
 builder.Services.AddSingleton<SessionKeyRegistry>();
 builder.Services.AddSingleton<AuthSessionRegistry>();
-builder.Services.AddHostedService(services => new DiarkisUdpService(
+// Two listeners of the same class: AddHostedService would keep only the first registration
+// (it de-duplicates by implementation type), so the session listener on UdpSessionPort never started.
+builder.Services.AddSingleton<IHostedService>(services => new DiarkisUdpService(
     services.GetRequiredService<IOptions<BreakerOptions>>(),
-    services.GetRequiredService<ILogger<DiarkisUdpService>>()));
-builder.Services.AddHostedService(services => new DiarkisUdpService(
+    services.GetRequiredService<ILogger<DiarkisUdpService>>(),
+    sessionListener: false,
+    sessionKeys: services.GetRequiredService<SessionKeyRegistry>()));
+builder.Services.AddSingleton<IHostedService>(services => new DiarkisUdpService(
     services.GetRequiredService<IOptions<BreakerOptions>>(),
     services.GetRequiredService<ILogger<DiarkisUdpService>>(),
     sessionListener: true,
@@ -64,6 +70,8 @@ app.Run();
 
 static bool HasValidDiarkisKeys(BreakerOptions options)
 {
+    if (!options.HasAnyDiarkisKey)
+        return true;  // fresh keys per session
     try
     {
         BreakerServer.Protocol.Diarkis.SecureEnvelope.FromHex(
