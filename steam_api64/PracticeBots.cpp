@@ -85,7 +85,12 @@ namespace
     std::uintptr_t g_Base = 0;
     int g_BotCount = 0;
     bool g_RaiderBot = true;
-    int g_FollowerBot = 0;                       // survivor_bot_follow: which bot (1-7) follows the player, 0 = none
+    // Brain mode. The chooser (sub_1401FC5E0) gives AI mode 6 the tutorial mode 0 (+0x1788 = 0, the guide
+    // handler sub_1402C4810 that leads the player to objectives - bots ran ahead and "followed" crates with an
+    // approach-a-character action that never finishes) and AI mode 7 mode 3. Our bots get -1 (no tutorial
+    // mode): only the free survivor planner runs.
+    std::uint8_t g_BotSlotMask = 0;
+    int g_FollowerBot = 0;                      // survivor_bot_follow: which bot (1-7) follows the player, 0 = none
     std::uint32_t g_FollowerSlot = 0xFFFFFFFF;   // slot of that bot in the current match
     std::uint32_t g_PlayerHandle = 0;
     void* g_AiUpdateTarget = nullptr;
@@ -277,10 +282,18 @@ namespace
 
     std::uint64_t __fastcall AiUpdateDetour(std::uintptr_t ai, float dt)
     {
-        if (g_Trace)
+        const std::uintptr_t self = CharacterAt(At<std::uint32_t>(ai + kAiCharacterHandle));
+        if (IsCharacter(self))
         {
-            const std::uintptr_t self = CharacterAt(At<std::uint32_t>(ai + kAiCharacterHandle));
-            if (IsCharacter(self))
+            const std::uint32_t slot = At<std::uint32_t>(self + kCharSlot);
+            if (slot < kSlotCount && (g_BotSlotMask & (1u << slot)) != 0 &&
+                (At<std::int32_t>(ai + 0x1780) != -1 || At<std::int32_t>(ai + 0x1788) != -1))
+            {
+                At<std::int32_t>(ai + 0x1780) = -1;
+                At<std::int32_t>(ai + 0x1788) = -1;
+                Logger::Info("PracticeBots: slot " + std::to_string(slot) + " brain set to free mode (-1)");
+            }
+            if (g_Trace)
                 TraceBot(ai, self);
         }
         if (g_FollowerSlot < kSlotCount)
@@ -385,6 +398,7 @@ namespace
             CapturePlayerLook(slots);
             g_FollowerSlot = 0xFFFFFFFF;
             g_PlayerHandle = 0;
+            g_BotSlotMask = 0;
 
             int added = 0;
             for (std::uint32_t i = 1; i < kSlotCount && added < g_BotCount; ++i)
@@ -393,6 +407,7 @@ namespace
                     continue;
                 AddSurvivorBot(slots, i, added + 1);
                 ApplyLook(slots, i, g_BotLooks[static_cast<std::size_t>(added)]);
+                g_BotSlotMask = static_cast<std::uint8_t>(g_BotSlotMask | (1u << i));
                 ++added;
                 if (added == g_FollowerBot)
                 {
@@ -463,9 +478,8 @@ bool PracticeBots::Init()
     if (g_Trace)
         Logger::Info("PracticeBots: bot status trace on (every 2 s per bot)");
 
-    bool follow = true;
-    if (g_FollowerBot > 0 || g_Trace)
-        follow = Hook(kAiUpdateRva, reinterpret_cast<void*>(&AiUpdateDetour),
+    // Always on with bots: the update hook also takes the bots out of the tutorial mode.
+    const bool follow = Hook(kAiUpdateRva, reinterpret_cast<void*>(&AiUpdateDetour),
             reinterpret_cast<void**>(&g_OriginalAiUpdate), &g_AiUpdateTarget, "0x1402BE6E0 (tutorial AI update, follower)");
 
     g_RaiderBot = GetPrivateProfileIntA("steam", "practice_raider_bot", 1, SteamConfig::GetPath().c_str()) != 0;
