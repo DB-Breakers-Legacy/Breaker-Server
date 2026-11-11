@@ -14,3 +14,6 @@ TestResults/
 !.env.example
 steam_config.ini
 Logs/
+logs/
+Breaker-Server-main/Bin/
+account-token-secret.key
