@@ -381,6 +381,26 @@ public static class ApiEndpoints
             });
         });
 
+        // Practice battle start (ServerApiResponsePracticeBattleStart, parser 0x1407DD9E0): [status, string]
+        // (string reader sub_1407CFF90; Possible_ the battle id, like battle/start's second field). Request
+        // args: [[userId, ...]] (live: just the player). Missing, the 404 ended practice right after the
+        // connection room was set up (client error 10074141877067; live 2026-11-10).
+        api.MapPost("/battle/practice_start", async (
+            HttpRequest request,
+            ApiResponseService responses,
+            CancellationToken ct) =>
+        {
+            var body = ObjectTree.List(await MessagePackHttp.ReadAsync(request, ct), 2);
+            var args = ObjectTree.List(body[1], 1);
+            var roster = ObjectTree.List(args[0], 1);
+            var leader = ObjectTree.Text(roster[0]);
+            return responses.Respond(new object?[] { 0, $"{leader}_practice_{DateTimeOffset.Now:yyyyMMddHHmmss}" });
+        });
+
+        // Practice battle result (ServerApiResponsePracticeBattleResult, parser 0x1407DA7B0): [status] only.
+        api.MapPost("/battle/practice_result", (ApiResponseService responses) =>
+            responses.Respond(new object?[] { 0 }));
+
         api.MapPost("/battle/result", (ApiResponseService responses) =>
         {
             object?[] pass =

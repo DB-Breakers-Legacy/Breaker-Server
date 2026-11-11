@@ -57,6 +57,19 @@ public sealed class ApiIntegrationTests : IClassFixture<BreakerApiFactory>
     }
 
     [Fact]
+    public async Task PracticeStartReturnsStatusAndBattleId()
+    {
+        var token = await Authenticate(UserId, UserId);
+        object[] body = [new Dictionary<string, object?> { ["userId"] = token }, new List<object?> { new List<object?> { token } }];
+        using var response = await Post("/dbtb-prd/025348/api/battle/practice_start", body);
+        var reply = ObjectTree.List(ObjectTree.List(await ReadResponse(response))[1]);
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        Assert.Equal(0, ObjectTree.Int32(reply[0]));
+        Assert.StartsWith(token, ObjectTree.Text(reply[1]));
+    }
+
+    [Fact]
     public async Task SelectableStageReturnsStatusAndList()
     {
         var token = await Authenticate(UserId, UserId);
