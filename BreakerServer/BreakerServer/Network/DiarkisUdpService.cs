@@ -685,21 +685,26 @@ public sealed class DiarkisUdpService(
                 list.Add(bot.Member);
         }
 
-        var members = new JsonObject
+        // The list arrives in pages: total = number of pages, serial = this page (1-based). The client
+        // (sub_140806A90) keeps a slot per page, appends each page's members, and applies the list once all
+        // pages are in; a serial above total is dropped (counting serial up across lists made every list
+        // after the first be ignored, live 2026-11-10). One member per page: a single 8-member message was
+        // 4410 bytes, the client never ACKed it and dropped the connection (error 330000104, 2026-11-11).
+        var pages = list.Select(m => m!.DeepClone()).ToList();
+        for (var page = 0; page < pages.Count; page++)
         {
-            ["roomId"] = session.PracticeRoomId ?? string.Empty,
-            ["roomOwnerUserId"] = request.UserId,
-            ["roomMemberList"] = list,
-            // The list arrives in pages: total = number of pages, serial = this page (1-based). The client
-            // (sub_140806A90) keeps a slot per page and applies the list once all pages are in; a serial
-            // above total is dropped. Earlier we counted serial up (2, 3, ...) and every list after the
-            // first was ignored (live 2026-11-10). One page: always total 1, serial 1.
-            ["total"] = 1,
-            ["serial"] = 1,
-        };
-        var json = members.ToJsonString();
-        logger.LogInformation("Practice push id=32101 data={Data}", json);
-        await SendDatAsync(udp, session, CmdPracticeRoom, version, 0x01, request.Reply(32101, json), ct);
+            var members = new JsonObject
+            {
+                ["roomId"] = session.PracticeRoomId ?? string.Empty,
+                ["roomOwnerUserId"] = request.UserId,
+                ["roomMemberList"] = new JsonArray(pages[page]),
+                ["total"] = pages.Count,
+                ["serial"] = page + 1,
+            };
+            var json = members.ToJsonString();
+            logger.LogInformation("Practice push id=32101 page {Page}/{Total} data={Data}", page + 1, pages.Count, json);
+            await SendDatAsync(udp, session, CmdPracticeRoom, version, 0x01, request.Reply(32101, json), ct);
+        }
     }
 
     // The 7 bot members of a Trial Match room. One wants to be the Raider unless the player does (desiredRole:
