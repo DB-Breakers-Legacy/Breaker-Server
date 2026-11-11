@@ -40,6 +40,15 @@ namespace
     constexpr std::uintptr_t kSlotSkipAi = 0xD04;
     constexpr std::uintptr_t kTutorialManager = 0x6828;
 
+    // Looks. A slot's look container is at +0x148; the game copies an AvatarVisual into it with
+    // sub_140707830(slot + 0x148, avatarVisual), which takes the AvatarVisual fields +0x08..+0x440 (plain data)
+    // into container +0x28.. - i.e. the slot's own AvatarVisual data sits at slot + 0x168.
+    constexpr std::uintptr_t kCopyLookRva = 0x707830;          // sub_140707830
+    constexpr std::uintptr_t kSlotLookContainer = 0x148;
+    constexpr std::uintptr_t kSlotLookData = 0x168;            // = container + 0x20, same layout as an AvatarVisual
+    constexpr std::size_t kLookSize = 0x440;                   // AvatarVisual bytes used by the copy
+    constexpr std::uintptr_t kLocalPlayerSlot = 0x66B8;        // slots + 0x66B8 = the local player's slot index
+
     constexpr std::uint32_t kSlotCount = 8;
     constexpr std::uint32_t kAiModeOrientation = 6;
 
@@ -48,10 +57,12 @@ namespace
     using MakeBotSlotFn = void(__fastcall*)(std::uintptr_t, std::uint32_t, std::uint32_t, std::uint32_t);
     using TutorialGetFn = std::uintptr_t(__fastcall*)(std::uintptr_t);
     using StringAssignFn = void*(__fastcall*)(void*, const char*, std::size_t);
+    using CopyLookFn = std::uint8_t(__fastcall*)(std::uintptr_t, const void*);
 
     std::uintptr_t g_Base = 0;
     int g_BotCount = 0;
     bool g_RaiderBot = true;
+    std::array<std::string, 7> g_BotLooks;   // survivor_bot_look1..7 = name of a .look file in BreakersRevived\looks
     void* g_AddRaiderBotTarget = nullptr;
     AddRaiderBotFn g_OriginalAddRaiderBot = nullptr;
     void* g_LobbyStartTarget = nullptr;
@@ -67,6 +78,58 @@ namespace
         std::ostringstream text;
         text << "0x" << std::hex << std::uppercase << value;
         return text.str();
+    }
+
+    std::filesystem::path LooksFolder()
+    {
+        return std::filesystem::path(SteamConfig::GetPath()).parent_path() / "looks";
+    }
+
+    // Saves the local player's current look so it can be given to a bot (e.g. wear the Bulma skin, start a
+    // practice match, rename the capture to bulma.look).
+    void CapturePlayerLook(std::uintptr_t slots)
+    {
+        const std::uint32_t player = At<std::uint32_t>(slots + kLocalPlayerSlot);
+        if (player >= 8)
+            return;
+        const auto* look = reinterpret_cast<const char*>(slots + player * kSlotStride + kSlotLookData);
+        try
+        {
+            std::filesystem::create_directories(LooksFolder());
+            const auto path = LooksFolder() / "last_player_look.look";
+            std::ofstream out(path, std::ios::binary | std::ios::trunc);
+            out.write(look, kLookSize);
+            Logger::Info("PracticeBots: saved your current look (slot " + std::to_string(player) + ") to " + path.string());
+        }
+        catch (...)
+        {
+            Logger::Error("PracticeBots: could not save the player look");
+        }
+    }
+
+    // Gives a bot a saved look: start from the bot's own look data (valid header), overwrite the AvatarVisual
+    // fields +0x08.. with the saved bytes, and let the game copy it into the slot.
+    void ApplyLook(std::uintptr_t slots, std::uint32_t index, const std::string& name)
+    {
+        if (name.empty())
+            return;
+        const auto path = LooksFolder() / (name + ".look");
+        std::ifstream in(path, std::ios::binary);
+        std::vector<char> saved(kLookSize);
+        if (!in || !in.read(saved.data(), static_cast<std::streamsize>(kLookSize)))
+        {
+            Logger::Error("PracticeBots: look '" + name + "' not found or too short: " + path.string());
+            return;
+        }
+
+        const std::uintptr_t slot = slots + index * kSlotStride;
+        alignas(16) std::array<char, kLookSize> buffer{};
+        std::memcpy(buffer.data(), reinterpret_cast<const void*>(slot + kSlotLookData), kLookSize);
+        std::memcpy(buffer.data() + 8, saved.data() + 8, kLookSize - 8);
+
+        auto copyLook = reinterpret_cast<CopyLookFn>(g_Base + kCopyLookRva);
+        copyLook(slot + kSlotLookContainer, buffer.data());
+        Logger::Info("PracticeBots: bot in slot " + std::to_string(index) + " wears look '" + name + "'");
     }
 
     std::uintptr_t __fastcall GuardedTutorialGet(std::uintptr_t manager)
@@ -142,12 +205,15 @@ namespace
             Logger::Info("PracticeBots: practice match starting; taken slots:" + taken +
                 "; tutorialManager=" + Hex(At<std::uintptr_t>(slots + kTutorialManager)));
 
+            CapturePlayerLook(slots);
+
             int added = 0;
             for (std::uint32_t i = 1; i < kSlotCount && added < g_BotCount; ++i)
             {
                 if (At<std::uint8_t>(slots + i * kSlotStride + kSlotPresent) != 0)
                     continue;
                 AddSurvivorBot(slots, i, added + 1);
+                ApplyLook(slots, i, g_BotLooks[static_cast<std::size_t>(added)]);
                 ++added;
             }
             Logger::Info("PracticeBots: added " + std::to_string(added) + " survivor bot(s)");
@@ -186,6 +252,15 @@ bool PracticeBots::Init()
     if (g_BotCount > 7)
         g_BotCount = 7;
     Logger::Info("PracticeBots: up to " + std::to_string(g_BotCount) + " survivor bot(s) per practice match");
+    for (std::size_t i = 0; i < g_BotLooks.size(); ++i)
+    {
+        char value[128] = {};
+        const std::string key = "survivor_bot_look" + std::to_string(i + 1);
+        GetPrivateProfileStringA("steam", key.c_str(), "", value, sizeof(value), SteamConfig::GetPath().c_str());
+        g_BotLooks[i] = value;
+        if (!g_BotLooks[i].empty())
+            Logger::Info("PracticeBots: survivor bot " + std::to_string(i + 1) + " look = " + g_BotLooks[i]);
+    }
 
     g_Base = reinterpret_cast<std::uintptr_t>(GetModuleHandleW(nullptr));
     if (g_Base == 0)
