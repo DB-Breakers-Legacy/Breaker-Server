@@ -46,7 +46,8 @@ public sealed class DiarkisUdpService(
     private const ushort CmdUdpCheckNatType = 0x0131;           // 305 client -> server (16 zero bytes)
     private const ushort CmdConnectionRoomProbe = 0x55F0;
     private const ushort CmdPracticeRoom = 32000;                // 0x7D00, game messages 32xxx -> 33xxx
-    private const ushort CmdPracticeConnection = 42000;          // 0xA410, connection room 42xxx -> 43xxx (session listener)
+    private const ushort CmdRoomRegister = 115;                  // 0x0073, Diarkis built-in room command (ver 1)
+    private const ushort CmdPracticeConnection = 42000;         // 0xA410, connection room 42xxx -> 43xxx (session listener)
     // Captures show exactly two hole-punch requests per matching session (UdpPort, then UdpSessionPort).
     // Answering every "done" with a new request loops forever (seen live on 2026-11-10).
     private const int HolePunchRequestsPerSession = 2;
@@ -354,6 +355,17 @@ public sealed class DiarkisUdpService(
                 return;
             case CmdPracticeConnection:
                 await HandlePracticeConnectionAsync(udp, session, version, plaintext, ct);
+                return;
+            case CmdRoomRegister when version == 1:
+                // Diarkis built-in RoomRegister (ver 1, cmd 115): u32 roomType, then length-prefixed
+                // roomID, roomName and metadata JSON (live: type 0, "<room>-conn", the player name,
+                // {"rule","ver","created_at","uid","platform"}). The client's Room response switch
+                // (sub_140D8DEF0, case 105 = cmd 115) raises the register event (sub_140D97200) with
+                // success = status 1 and any payload. Unanswered, the client stayed on "establishing
+                // the connection" (live 2026-11-10).
+                CaptureCommand(command, version, plaintext);
+                logger.LogInformation("Diarkis {Listener} RoomRegister -> success", _name);
+                await SendDatAsync(udp, session, CmdRoomRegister, 1, 0x01, [], ct);
                 return;
             default:
                 logger.LogInformation(
