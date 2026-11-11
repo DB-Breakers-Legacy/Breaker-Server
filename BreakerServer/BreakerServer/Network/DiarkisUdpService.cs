@@ -487,6 +487,36 @@ public sealed class DiarkisUdpService(
         var json = reply.ToJsonString();
         logger.LogInformation("Practice reply id={Id} data={Data}", replyId, json);
         await SendDatAsync(udp, session, CmdPracticeRoom, version, 0x01, request.Reply(replyId, json), ct);
+
+        // Practice against the bot has no other players to wait for: once the client has sent its role
+        // request (32012), tell it the match is found (32105 ProtocolNotifyPracticeRoomOnMatchingComplete).
+        // Rules (MATCHMAKING_PROTOCOL.md section 8): all five keys present; roleList entries {userId, role}
+        // for members the client knows (here only the player; Possible_ the bot is added by the client from
+        // rivalBot); stageId must be a stage the client knows (we echo desiredStageId, e.g. "1000").
+        // The client accepts it only in matching states 0/14/15, so it goes out after a short delay.
+        // Sent through the same response path as the replies: the client's decoder queues both by message id.
+        if (request.Id == 32012)
+        {
+            var role = body["desiredRole"]?.GetValue<int>() ?? 1;
+            var stageId = body["desiredStageId"]?.GetValue<string>() ?? "1000";
+            if (stageId == "unselected")
+                stageId = "1000";
+            var matched = new JsonObject
+            {
+                ["roleList"] = new JsonArray(new JsonObject { ["userId"] = request.UserId, ["role"] = role }),
+                ["battleRoomId"] = $"{session.PracticeRoomId ?? "practice"}-battle",
+                ["stageId"] = stageId,
+                ["rivalPriorityPoint"] = 0,
+                ["patrollerPriorityPoint"] = 0,
+            };
+            var matchedJson = matched.ToJsonString();
+            _ = Task.Run(async () =>
+            {
+                await Task.Delay(TimeSpan.FromSeconds(1.5), ct);
+                logger.LogInformation("Practice push id=32105 data={Data}", matchedJson);
+                await SendDatAsync(udp, session, CmdPracticeRoom, version, 0x01, request.Reply(32105, matchedJson), ct);
+            }, ct);
+        }
     }
 
     // --- clear-text 0x0C0C directory ---
