@@ -49,6 +49,11 @@ public sealed class DiarkisUdpService(
     private const ushort CmdUdpCheckNatType = 0x0131;           // 305 client -> server (16 zero bytes)
     private const ushort CmdConnectionRoomProbe = 0x55F0;
     private const ushort CmdPracticeRoom = 32000;                // 0x7D00, game messages 32xxx -> 33xxx
+    private const ushort CmdCasualRoom = 12000;                  // 0x2EE0, casual (normal matchmaking) 12xxx -> 13xxx
+    private const ushort CmdCasualConnection = 22000;            // 0x55F0, casual connection room 22xxx -> 23xxx
+    // Normal matchmaking autofill: when no real player has joined this long after the role request, the room
+    // is filled with bot members and the match starts (the client DLL adds the bots in the match).
+    private static readonly TimeSpan CasualAutofillAfter = TimeSpan.FromSeconds(30);
     private const ushort CmdRoomLeave = 102;                     // 0x0066, Diarkis built-in room command (ver 1)
     private const ushort CmdRoomRegister = 115;                 // 0x0073, Diarkis built-in room command (ver 1)
     private const ushort CmdPracticeConnection = 42000;         // 0xA410, connection room 42xxx -> 43xxx (session listener)
@@ -74,6 +79,8 @@ public sealed class DiarkisUdpService(
         public JsonObject? PracticeDesire;   // the player's 32012 request body (desiredRole, desiredStageId)
         public string? PracticeSdp;          // latest sdpData from 32005 (member data set)
         public bool PracticeTrial;           // room set to Trial Match (32026 rivalBot 0): fill it with bot members
+        public ushort RoomBase = CmdPracticeRoom;  // message family of the current room: 32000 practice, 12000 casual
+        public bool CasualAutofillStarted;   // the 30 s autofill timer is running / has run for this room
         public string? ClientPublicAddress;
         public string? ClientLanAddress;
     }
@@ -351,12 +358,18 @@ public sealed class DiarkisUdpService(
                 return;
             case CmdUdpCheckNatType:
                 return;  // 16 zero bytes; the ACK was already sent
+            case CmdCasualConnection when sessionListener && IsGameMessage(plaintext):
+                await HandlePracticeConnectionAsync(udp, session, version, plaintext, ct, CmdCasualConnection);
+                return;
             case CmdConnectionRoomProbe when sessionListener:
                 await SendDatAsync(udp, session, CmdRedirect, 0, 0xFF,
                     [.. RedirectMarker, .. Encoding.ASCII.GetBytes(MatchingAddress)], ct);
                 return;
             case CmdPracticeRoom:
                 await HandlePracticeRoomAsync(udp, session, version, plaintext, ct);
+                return;
+            case CmdCasualRoom:
+                await HandlePracticeRoomAsync(udp, session, version, plaintext, ct, CmdCasualRoom);
                 return;
             case CmdPracticeConnection:
                 await HandlePracticeConnectionAsync(udp, session, version, plaintext, ct);
@@ -471,9 +484,12 @@ public sealed class DiarkisUdpService(
     // section 5/6. Replies go back as the same Diarkis command, status 1, no 4-byte prefix (to be confirmed live).
     private int _roomCounter;
 
-    private async Task HandlePracticeRoomAsync(UdpClient udp, Session session, byte version, byte[] plaintext, CancellationToken ct)
+    // Also serves the casual room (normal matchmaking): the same messages with ids 20000 lower (12xxx/13xxx),
+    // live 2026-11-11 (12000 CasualRoomCreate has exactly the fields of 32000).
+    private async Task HandlePracticeRoomAsync(UdpClient udp, Session session, byte version, byte[] plaintext, CancellationToken ct,
+        ushort b = CmdPracticeRoom)
     {
-        CaptureCommand(CmdPracticeRoom, version, plaintext);
+        CaptureCommand(b, version, plaintext);
         GameMessage request;
         try
         {
@@ -492,12 +508,14 @@ public sealed class DiarkisUdpService(
         try { body = JsonNode.Parse(request.Data) as JsonObject ?? []; }
         catch (JsonException) { body = []; }
 
+        session.RoomBase = b;
+        var k = request.Id - b;   // message number within the family (0 create, 12 role request, 17 open, ...)
         var reply = new JsonObject { ["status"] = 0 };
-        switch (request.Id)
+        switch (k)
         {
-            case 32000: // PracticeRoomCreate -> 33000
-            case 32001: // PracticeRoomJoin -> 33001
-                session.PracticeRoomId ??= $"practice{Interlocked.Increment(ref _roomCounter):D6}";
+            case 0: // RoomCreate -> +1000
+            case 1: // RoomJoin -> +1000
+                session.PracticeRoomId ??= $"{(b == CmdCasualRoom ? "casual" : "practice")}{Interlocked.Increment(ref _roomCounter):D6}";
                 session.PracticeCreate = body;
                 reply["roomId"] = session.PracticeRoomId;
                 reply["roomKey"] = "0000";
@@ -506,13 +524,13 @@ public sealed class DiarkisUdpService(
                 reply["normalRule"] = 1;
                 reply["coolDown"] = 1;
                 break;
-            case 32006: // PracticeRoomDataGet -> 33006
+            case 6: // RoomDataGet
                 reply["roomData"] = new JsonObject { ["gameRule"] = 0 };
                 break;
-            case 32008: // PracticeRoomOwnerGet -> 33008
+            case 8: // RoomOwnerGet
                 reply["roomId"] = session.PracticeRoomId ?? string.Empty;
                 break;
-            case 32017: // PracticeRoomOpen -> 33017
+            case 17: // RoomOpen
                 reply["battleRoomId"] = $"{session.PracticeRoomId ?? "practice"}-battle";
                 break;
         }
@@ -520,7 +538,7 @@ public sealed class DiarkisUdpService(
         var replyId = request.Id + 1000;
         var json = reply.ToJsonString();
         logger.LogInformation("Practice reply id={Id} data={Data}", replyId, json);
-        await SendDatAsync(udp, session, CmdPracticeRoom, version, 0x01, request.Reply(replyId, json), ct);
+        await SendDatAsync(udp, session, b, version, 0x01, request.Reply(replyId, json), ct);
 
         // Notifies go through the same response path as the replies: the client's decoder queues both by
         // message id.
@@ -531,10 +549,12 @@ public sealed class DiarkisUdpService(
         // sub_140780D40 -> roomId, roomOwnerUserId, roomMemberList, total, serial (all required);
         // member sub_1407A0420 -> userId, userData, sdpData; userData sub_1407A07C0 -> userName, userRank,
         // userRivalRank, desiredRole, desiredStageId, platform (all required). Live test 2026-11-10.
-        if (request.Id == 32012)
+        if (k == 12)
         {
             session.PracticeDesire = body;
             await SendPracticeMembersAsync(udp, session, version, request, ct);
+            if (b == CmdCasualRoom)
+                StartCasualAutofill(udp, session, version, request, ct);
         }
 
         // 32005 member data set: the client sends its current sdpData (e.g. "able_rematch":true, which the
@@ -542,7 +562,7 @@ public sealed class DiarkisUdpService(
         // member has sdp able_rematch (entry +0x1A0 = sdp +0x110, parser sub_140800990) and the can-open
         // flag (+0x1BA, set by 32120); otherwise MenuMatchCasual+0x88 = 3 and start is hidden (live
         // 2026-11-10). So store it, re-send the member list, then 32120 again.
-        if (request.Id == 32005)
+        if (k == 5)
         {
             if (body["sdpData"]?.GetValue<string>() is { Length: > 0 } sdp)
                 session.PracticeSdp = sdp;
@@ -553,7 +573,7 @@ public sealed class DiarkisUdpService(
         // After the owner sets the practice rules (32026): echo them to the room (32126 ChangePracticeRule)
         // and tell the owner the room may be opened (32120 ProtocolNotifyPracticeCanOpen {roomId};
         // PracticeMatchingModule slot 74 sub_140802F30 sets +0x1BA on every member entry).
-        if (request.Id == 32026)
+        if (b == CmdPracticeRoom && k == 26)
         {
             var rule = new JsonObject
             {
@@ -564,7 +584,7 @@ public sealed class DiarkisUdpService(
             };
             var ruleJson = rule.ToJsonString();
             logger.LogInformation("Practice push id=32126 data={Data}", ruleJson);
-            await SendDatAsync(udp, session, CmdPracticeRoom, version, 0x01, request.Reply(32126, ruleJson), ct);
+            await SendDatAsync(udp, session, b, version, 0x01, request.Reply(b + 126, ruleJson), ct);
 
             // Trial Match = the practice room with rivalBot 0 / normalRule 1 (live 2026-11-11). The room menu
             // (MenuMatchCasual, sub_1409C0070 / vfunc_4_2) only allows start when the member list holds 8
@@ -580,14 +600,14 @@ public sealed class DiarkisUdpService(
         // for members the client knows (here only the player; Possible_ the bot is added by the client from
         // rivalBot); stageId must be a stage the client knows (we echo desiredStageId, e.g. "1000").
         // The client accepts it only in matching states 0/14/15, so it goes out after a short delay.
-        if (request.Id == 32017)
+        if (k == 17)
         {
             // 32118 ProtocolNotifyPracticeOpenRoom {roomId}: the Open module (0x14081E030, state 4) waits
             // for both the 33017 reply (+0x2C) and this notify (+0x2D); after 30 s without both it fails
             // with error 1402 (client showed 330001402, "the room was not made public"; live 2026-11-10).
             var openJson = new JsonObject { ["roomId"] = session.PracticeRoomId ?? string.Empty }.ToJsonString();
             logger.LogInformation("Practice push id=32118 data={Data}", openJson);
-            await SendDatAsync(udp, session, CmdPracticeRoom, version, 0x01, request.Reply(32118, openJson), ct);
+            await SendDatAsync(udp, session, b, version, 0x01, request.Reply(b + 118, openJson), ct);
 
             var desire = session.PracticeDesire ?? [];
             var role = desire["desiredRole"]?.GetValue<int>() ?? 1;
@@ -607,7 +627,7 @@ public sealed class DiarkisUdpService(
             {
                 await Task.Delay(TimeSpan.FromSeconds(1.5), ct);
                 logger.LogInformation("Practice push id=32105 data={Data}", matchedJson);
-                await SendDatAsync(udp, session, CmdPracticeRoom, version, 0x01, request.Reply(32105, matchedJson), ct);
+                await SendDatAsync(udp, session, b, version, 0x01, request.Reply(b + 105, matchedJson), ct);
             }, ct);
         }
     }
@@ -620,9 +640,10 @@ public sealed class DiarkisUdpService(
     // {status, userList}. Unanswered 42000 ended in error 330001402 ("room was not made public").
     // After the create / join reply, 42100 BattleRoomAllJoined {roomMemberList: [{userId}]} (the bot is not
     // a member).
-    private async Task HandlePracticeConnectionAsync(UdpClient udp, Session session, byte version, byte[] plaintext, CancellationToken ct)
+    private async Task HandlePracticeConnectionAsync(UdpClient udp, Session session, byte version, byte[] plaintext, CancellationToken ct,
+        ushort cb = CmdPracticeConnection)
     {
-        CaptureCommand(CmdPracticeConnection, version, plaintext);
+        CaptureCommand(cb, version, plaintext);
         GameMessage request;
         try
         {
@@ -640,14 +661,15 @@ public sealed class DiarkisUdpService(
         try { body = JsonNode.Parse(request.Data) as JsonObject ?? []; }
         catch (JsonException) { body = []; }
 
+        var ck = request.Id - cb;
         var reply = new JsonObject { ["status"] = 0 };
-        switch (request.Id)
+        switch (ck)
         {
-            case 42000:
-            case 42001:
+            case 0:
+            case 1:
                 reply["diarkisRoomId"] = $"{body["connectionRoomId"]?.GetValue<string>() ?? "practice"}-conn";
                 break;
-            case 42005:
+            case 5:
                 reply["userList"] = new JsonArray(new JsonObject { ["userId"] = request.UserId, ["isBattleFinished"] = false });
                 break;
         }
@@ -655,19 +677,19 @@ public sealed class DiarkisUdpService(
         var replyId = request.Id + 1000;
         var json = reply.ToJsonString();
         logger.LogInformation("Connection reply id={Id} data={Data}", replyId, json);
-        await SendDatAsync(udp, session, CmdPracticeConnection, version, 0x01, request.Reply(replyId, json), ct);
+        await SendDatAsync(udp, session, cb, version, 0x01, request.Reply(replyId, json), ct);
 
         // 42100 sets Matching+0x120 (optional, flag +0x140; slot 81 0x140819DB0). Matching state 4 waits for
         // +0x1D0 (43000 reply) and +0x140, and only then moves on to the SDP update (42004, state 6), so the
         // notify goes right after the create / join reply (live 2026-11-10: stuck in state 4).
-        if (request.Id is 42000 or 42001)
+        if (ck is 0 or 1)
         {
             var joined = new JsonObject
             {
                 ["roomMemberList"] = new JsonArray(new JsonObject { ["userId"] = request.UserId }),
             }.ToJsonString();
             logger.LogInformation("Connection push id=42100 data={Data}", joined);
-            await SendDatAsync(udp, session, CmdPracticeConnection, version, 0x01, request.Reply(42100, joined), ct);
+            await SendDatAsync(udp, session, cb, version, 0x01, request.Reply(cb + 100, joined), ct);
         }
     }
 
@@ -716,7 +738,7 @@ public sealed class DiarkisUdpService(
             };
             var json = members.ToJsonString();
             logger.LogInformation("Practice push id=32101 page {Page}/{Total} data={Data}", page + 1, pages.Count, json);
-            await SendDatAsync(udp, session, CmdPracticeRoom, version, 0x01, request.Reply(32101, json), ct);
+            await SendDatAsync(udp, session, session.RoomBase, version, 0x01, request.Reply(session.RoomBase + 101, json), ct);
         }
     }
 
@@ -771,12 +793,53 @@ public sealed class DiarkisUdpService(
         return new JsonArray(new JsonObject { ["userId"] = playerUserId, ["role"] = playerRole });
     }
 
+    private static bool IsGameMessage(byte[] plaintext) =>
+        plaintext.Length >= 4 && plaintext[0] == (byte)'C' && plaintext[1] == (byte)'S' && plaintext[2] == (byte)'M' && plaintext[3] == (byte)'S';
+
+    // Normal matchmaking autofill (experiment, 2026-11-11). After the role request the room waits for real
+    // players; once CasualAutofillAfter has passed without any, the room is filled with the 7 bot members (paged
+    // member list, as in Trial Match) and the match is found with only the player in the role list. The client
+    // DLL adds the bots (and a Raider bot when the player is a survivor) in the match.
+    private void StartCasualAutofill(UdpClient udp, Session session, byte version, GameMessage request, CancellationToken ct)
+    {
+        if (session.CasualAutofillStarted)
+            return;
+        session.CasualAutofillStarted = true;
+        logger.LogInformation("Casual matchmaking: waiting {Seconds} s for players before filling with bots", CasualAutofillAfter.TotalSeconds);
+        _ = Task.Run(async () =>
+        {
+            await Task.Delay(CasualAutofillAfter, ct);
+            logger.LogInformation("Casual matchmaking: {Seconds} s passed with no players, filling the room with bots", CasualAutofillAfter.TotalSeconds);
+            session.PracticeTrial = true;
+            await SendPracticeMembersAsync(udp, session, version, request, ct);
+            await SendPracticeCanOpenAsync(udp, session, version, request, ct);
+
+            var desire = session.PracticeDesire ?? [];
+            var role = desire["desiredRole"]?.GetValue<int>() ?? 1;
+            var stageId = desire["desiredStageId"]?.GetValue<string>() ?? "1000";
+            if (stageId == "unselected")
+                stageId = "1000";
+            var matched = new JsonObject
+            {
+                ["roleList"] = TrialRoleList(session, request.UserId, role),
+                ["battleRoomId"] = $"{session.PracticeRoomId ?? "casual"}-battle",
+                ["stageId"] = stageId,
+                ["rivalPriorityPoint"] = 0,
+                ["patrollerPriorityPoint"] = 0,
+            };
+            var matchedJson = matched.ToJsonString();
+            await Task.Delay(TimeSpan.FromSeconds(1.5), ct);
+            logger.LogInformation("Casual push id={Id} data={Data}", CmdCasualRoom + 105, matchedJson);
+            await SendDatAsync(udp, session, CmdCasualRoom, version, 0x01, request.Reply(CmdCasualRoom + 105, matchedJson), ct);
+        }, ct);
+    }
+
     private async Task SendPracticeCanOpenAsync(
         UdpClient udp, Session session, byte version, GameMessage request, CancellationToken ct)
     {
         var json = new JsonObject { ["roomId"] = session.PracticeRoomId ?? string.Empty }.ToJsonString();
         logger.LogInformation("Practice push id=32120 data={Data}", json);
-        await SendDatAsync(udp, session, CmdPracticeRoom, version, 0x01, request.Reply(32120, json), ct);
+        await SendDatAsync(udp, session, session.RoomBase, version, 0x01, request.Reply(session.RoomBase + 120, json), ct);
     }
 
     // --- clear-text 0x0C0C directory ---

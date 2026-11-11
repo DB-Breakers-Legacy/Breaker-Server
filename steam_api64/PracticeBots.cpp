@@ -24,6 +24,8 @@ namespace
     constexpr std::uintptr_t kGameGlobalPtrRva = 0x177E470;   // XG::Game global holding the 8 player slots
     constexpr std::uintptr_t kLobbyStartRva = 0x67B260;       // sub_14067B260 (GamePhaseLobby: start the match)
     constexpr std::uintptr_t kAddRaiderBotRva = 0x8BF360;     // sub_1408BF360 (lobby adds the Raider bot to slot 7)
+    constexpr std::uintptr_t kRivalIdRva = 0xC60F70;          // sub_140C60F70() -> the value the lobby passes as a3
+    constexpr std::uintptr_t kRivalOptionRva = 0xC60FD0;      // sub_140C60FD0(1, 0) -> the value the lobby passes as a4
     constexpr std::uintptr_t kLobbyPhaseState = 0x308;        // GamePhaseLobby+0x308, set to 16 when the match starts
     constexpr std::uintptr_t kPracticeFlag = 0x28;            // slots+0x28: practice room
     constexpr std::uintptr_t kMakeBotSlotRva = 0x8C0B70;      // sub_1408C0B70
@@ -95,6 +97,7 @@ namespace
     // mode): only the free survivor planner runs.
     std::uint8_t g_BotSlotMask = 0;
     bool g_FreeMode = false;
+    bool g_CasualBots = false;   // casual_bots=1: also fill normal-matchmaking matches (server autofill)
     int g_FollowerBot = 0;                      // survivor_bot_follow: which bot (1-7) follows the player, 0 = none
     std::uint32_t g_FollowerSlot = 0xFFFFFFFF;   // slot of that bot in the current match
     std::uint32_t g_PlayerHandle = 0;
@@ -388,7 +391,10 @@ namespace
             return;
 
         const std::uintptr_t slots = At<std::uintptr_t>(g_Base + kGameGlobalPtrRva);
-        if (slots == 0 || At<std::uint8_t>(slots + kPracticeFlag) == 0)
+        if (slots == 0)
+            return;
+        const bool practice = At<std::uint8_t>(slots + kPracticeFlag) != 0;
+        if (!practice && !g_CasualBots)
             return;
 
         try
@@ -404,6 +410,32 @@ namespace
             }
             Logger::Info("PracticeBots: practice match starting; taken slots:" + taken +
                 "; tutorialManager=" + Hex(At<std::uintptr_t>(slots + kTutorialManager)));
+
+            // Normal matchmaking autofill (casual_bots=1): the server starts the match with only the player;
+            // the empty slots are filled here. The practice lobby adds the Raider bot itself; a normal match
+            // does not, so when no player is the Raider it is added the way the practice lobby does it
+            // (sub_14067B260: sub_1408BF360(slots, 7, sub_140C60F70(), sub_140C60FD0(1, 0), aiOff)) with its AI on.
+            if (!practice)
+            {
+                bool hasRaider = false;
+                for (std::uint32_t i = 0; i < kSlotCount; ++i)
+                {
+                    const std::uintptr_t slot = slots + i * kSlotStride;
+                    if (At<std::uint8_t>(slot + kSlotPresent) != 0 && At<std::uint32_t>(slot + kSlotRole) == 1)
+                        hasRaider = true;
+                }
+                if (!hasRaider && At<std::uint8_t>(slots + 7 * kSlotStride + kSlotPresent) == 0)
+                {
+                    const auto rivalId = reinterpret_cast<std::uint32_t(__fastcall*)()>(g_Base + kRivalIdRva)();
+                    const auto option = reinterpret_cast<std::uint8_t(__fastcall*)(std::uint32_t, std::uint32_t)>(g_Base + kRivalOptionRva)(1, 0);
+                    // The original, not the hooked entry: practice_raider_bot=0 hooks this function to switch the
+                    // practice Raider off, which must not apply here.
+                    const auto addRaider = g_OriginalAddRaiderBot != nullptr
+                        ? g_OriginalAddRaiderBot : reinterpret_cast<AddRaiderBotFn>(g_Base + kAddRaiderBotRva);
+                    addRaider(slots, 7, rivalId, option, 0);
+                    Logger::Info("PracticeBots: normal match - Raider bot added in slot 7 (AI on)");
+                }
+            }
 
             CapturePlayerLook(slots);
             g_FollowerSlot = 0xFFFFFFFF;
@@ -484,6 +516,9 @@ bool PracticeBots::Init()
     const bool add = Hook(kLobbyStartRva, reinterpret_cast<void*>(&LobbyStartDetour),
         reinterpret_cast<void**>(&g_OriginalLobbyStart), &g_LobbyStartTarget, "sub_14067B260 (lobby match start)");
 
+    g_CasualBots = GetPrivateProfileIntA("steam", "casual_bots", 0, SteamConfig::GetPath().c_str()) != 0;
+    if (g_CasualBots)
+        Logger::Info("PracticeBots: normal matches are filled with bots too (casual_bots=1)");
     g_FreeMode = GetPrivateProfileIntA("steam", "survivor_bot_free_mode", 0, SteamConfig::GetPath().c_str()) != 0;
     g_Trace = GetPrivateProfileIntA("steam", "survivor_bot_trace", 0, SteamConfig::GetPath().c_str()) != 0;
     if (g_Trace)
