@@ -33,7 +33,10 @@ public sealed class DiarkisUdpService(
     private const int SidLength = 16;
     private const int MaxSeenSequences = 4096;
     private static readonly TimeSpan RetransmitInterval = TimeSpan.FromMilliseconds(500);
-    private static readonly TimeSpan IdleTimeout = TimeSpan.FromMinutes(2);
+    // The client goes quiet on the matching session during a match; a 7-minute Trial Match outlasted the old
+    // 2-minute timeout, the session was dropped and the client could not leave the room afterwards
+    // (stuck on "now loading", 2026-11-11).
+    private static readonly TimeSpan IdleTimeout = TimeSpan.FromMinutes(30);
     private static readonly byte[] DirectoryCommand = [0x0C, 0x0C, 0, 0, 0, 1];
     private static readonly byte[] InitMarker = [0xA0, 0x01, 0x00, 0x00];
     private static readonly byte[] RedirectMarker = [0xBE, 0xEF, 0xFE, 0xED];
@@ -46,7 +49,8 @@ public sealed class DiarkisUdpService(
     private const ushort CmdUdpCheckNatType = 0x0131;           // 305 client -> server (16 zero bytes)
     private const ushort CmdConnectionRoomProbe = 0x55F0;
     private const ushort CmdPracticeRoom = 32000;                // 0x7D00, game messages 32xxx -> 33xxx
-    private const ushort CmdRoomRegister = 115;                  // 0x0073, Diarkis built-in room command (ver 1)
+    private const ushort CmdRoomLeave = 102;                     // 0x0066, Diarkis built-in room command (ver 1)
+    private const ushort CmdRoomRegister = 115;                 // 0x0073, Diarkis built-in room command (ver 1)
     private const ushort CmdPracticeConnection = 42000;         // 0xA410, connection room 42xxx -> 43xxx (session listener)
     // Captures show exactly two hole-punch requests per matching session (UdpPort, then UdpSessionPort).
     // Answering every "done" with a new request loops forever (seen live on 2026-11-10).
@@ -356,6 +360,15 @@ public sealed class DiarkisUdpService(
                 return;
             case CmdPracticeConnection:
                 await HandlePracticeConnectionAsync(udp, session, version, plaintext, ct);
+                return;
+            case CmdRoomLeave when version == 1:
+                // Diarkis built-in RoomLeave (ver 1, cmd 102), sent twice when a match ends (room id + user id,
+                // then user id). The Room response switch (sub_140D8DEF0, case 92 = cmd 102) raises the leave
+                // event (sub_140D92480) with success = status 1. Unanswered, the client stayed on "now loading"
+                // after the match (2026-11-11).
+                CaptureCommand(command, version, plaintext);
+                logger.LogInformation("Diarkis {Listener} RoomLeave -> success", _name);
+                await SendDatAsync(udp, session, CmdRoomLeave, 1, 0x01, [], ct);
                 return;
             case CmdRoomRegister when version == 1:
                 // Diarkis built-in RoomRegister (ver 1, cmd 115): u32 roomType, then length-prefixed
