@@ -62,6 +62,7 @@ public sealed class DiarkisUdpService(
         public FragmentReassembler Fragments { get; } = new();
         public bool Bootstrapped;
         public int HolePunchRequests;
+        public Dictionary<int, int> ResendCounts { get; } = [];
         public string? PracticeRoomId;
         public string? ClientPublicAddress;
         public string? ClientLanAddress;
@@ -227,13 +228,16 @@ public sealed class DiarkisUdpService(
                 return;
 
             session.LastSeen = DateTimeOffset.UtcNow;
-            session.Unacked.Remove(sequence);
+            if (session.Unacked.Remove(sequence, out var acked))
+                LogAcked(session, sequence, acked);
             var sidBytes = payload.AsSpan(0, SidLength);
             for (var offset = SidLength; payload.Length - offset >= 20; offset += 20)
             {
                 if (!payload.AsSpan(offset + 4, SidLength).SequenceEqual(sidBytes))
                     break;
-                session.Unacked.Remove(payload[offset] | (payload[offset + 1] << 8) | (payload[offset + 2] << 16));
+                var extra = payload[offset] | (payload[offset + 1] << 8) | (payload[offset + 2] << 16);
+                if (session.Unacked.Remove(extra, out var extraAcked))
+                    LogAcked(session, extra, extraAcked);
             }
         }
     }
@@ -559,7 +563,14 @@ public sealed class DiarkisUdpService(
                     }
 
                     foreach (var (sequence, envelope) in session.Unacked)
+                    {
                         resend.Add((DiarkisPacketFactory.Combine(DatagramHeader.Pack(sequence, (byte)DiarkisPacketType.Resend), envelope), session.Remote));
+                        var count = session.ResendCounts.TryGetValue(sequence, out var c) ? c + 1 : 1;
+                        session.ResendCounts[sequence] = count;
+                        if (count <= 3 || count % 20 == 0)
+                            logger.LogInformation("Diarkis {Listener} RESEND seq={Sequence} cmd=0x{Command:X4} attempt={Count} sid={Sid}",
+                                _name, sequence, EnvelopeCommand(envelope), count, sid);
+                    }
                 }
             }
 
@@ -569,6 +580,17 @@ public sealed class DiarkisUdpService(
                 catch (SocketException ex) { logger.LogDebug(ex, "Resend to {Remote} failed", remote); }
             }
         }
+    }
+
+    private static int EnvelopeCommand(byte[] envelope) =>
+        envelope.Length >= 10 ? (envelope[8] << 8) | envelope[9] : -1;
+
+    private void LogAcked(Session session, int sequence, byte[] envelope)
+    {
+        var command = EnvelopeCommand(envelope);
+        if (command != CmdInitOrHeartbeat)
+            logger.LogInformation("Diarkis {Listener} ACKED by client seq={Sequence} cmd=0x{Command:X4} sid={Sid}",
+                _name, sequence, command, session.Sid);
     }
 
     private static Task SendAsync(UdpClient udp, byte[] data, IPEndPoint remote, CancellationToken ct) =>
