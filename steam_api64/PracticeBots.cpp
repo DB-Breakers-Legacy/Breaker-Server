@@ -434,7 +434,12 @@ namespace
                     const auto addRaider = g_OriginalAddRaiderBot != nullptr
                         ? g_OriginalAddRaiderBot : reinterpret_cast<AddRaiderBotFn>(g_Base + kAddRaiderBotRva);
                     addRaider(slots, 7, rivalId, option, 0);
-                    Logger::Info("PracticeBots: normal match - Raider bot added in slot 7 (AI on)");
+                    // sub_1408BF360 gives the Raider AI mode 4: SimpleAIPractice with the practice patrol action
+                    // (brain chooser sub_1401FC5E0), which walks the practice Raider patrol points
+                    // (practiceRaiderPatrolPosition.prpp). A normal match does not load them, and the bot went to
+                    // the map origin under area X (live 2026-11-11). Mode 2 is the plain SimpleAI.
+                    At<std::uint32_t>(slots + 7 * kSlotStride + kSlotAiMode) = 2;
+                    Logger::Info("PracticeBots: normal match - Raider bot added in slot 7 (AI on, plain SimpleAI mode 2)");
                 }
             }
 
