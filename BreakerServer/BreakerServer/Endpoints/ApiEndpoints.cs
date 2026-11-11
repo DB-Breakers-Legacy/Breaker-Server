@@ -10,6 +10,8 @@ namespace BreakerServer.Endpoints;
 
 public static class ApiEndpoints
 {
+    private const int AdjustmentDataVersion = 2;
+
     public static IEndpointRouteBuilder MapBreakerApi(this IEndpointRouteBuilder app)
     {
         app.MapBootstrapEndpoints();
@@ -84,8 +86,16 @@ public static class ApiEndpoints
                 }
             }
 
-            return responses.Respond(new object?[] { 0, 2, text });
+            return responses.Respond(new object?[] { 0, AdjustmentDataVersion, text });
         });
+
+        // Battle-data version check before matching (ServerApiResponseGetOnlineBattleDataVersion,
+        // parser 0x1407F0C00: [status, version]). Must match the version adjustment_data_manage/read
+        // returns (its parser 0x1407F02B0 reads [status, version, data] with the same field reader).
+        // Missing, this 404 made the client show "a system error occurred when connecting to the
+        // matchmaking server" (live test 2026-11-10).
+        api.MapPost("/adjustment_data_manage/get_version", (ApiResponseService responses) =>
+            responses.Respond(new object?[] { 0, AdjustmentDataVersion }));
 
         api.MapPost("/battle/get_stun_server_info", (
             ApiResponseService responses,

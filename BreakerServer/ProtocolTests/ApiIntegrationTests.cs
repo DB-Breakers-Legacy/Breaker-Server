@@ -43,6 +43,20 @@ public sealed class ApiIntegrationTests : IClassFixture<BreakerApiFactory>
     }
 
     [Fact]
+    public async Task BattleDataVersionMatchesTheVersionReadReturns()
+    {
+        var token = await Authenticate(UserId, UserId);
+        using var version = await Post("/dbtb-prd/025348/api/adjustment_data_manage/get_version", AuthenticatedBody(token));
+        using var read = await Post("/dbtb-prd/025348/api/adjustment_data_manage/read", AuthenticatedBody(token));
+        var v = ObjectTree.List(ObjectTree.List(await ReadResponse(version))[1]);
+        var r = ObjectTree.List(ObjectTree.List(await ReadResponse(read))[1]);
+
+        Assert.Equal(HttpStatusCode.OK, version.StatusCode);
+        Assert.Equal(0, ObjectTree.Int32(v[0]));
+        Assert.Equal(ObjectTree.Int32(r[1]), ObjectTree.Int32(v[1]));
+    }
+
+    [Fact]
     public async Task SameAccountGetsTheSameUserIdAtEveryLogin()
     {
         var first = await Authenticate(UserId, UserId);
