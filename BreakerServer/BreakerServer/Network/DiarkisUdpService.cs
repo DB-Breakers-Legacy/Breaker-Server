@@ -69,6 +69,7 @@ public sealed class DiarkisUdpService(
         public JsonObject? PracticeCreate;   // the player's 32000 request body (name, ranks, sdpData, ...)
         public JsonObject? PracticeDesire;   // the player's 32012 request body (desiredRole, desiredStageId)
         public string? PracticeSdp;          // latest sdpData from 32005 (member data set)
+        public bool PracticeTrial;           // room set to Trial Match (32026 rivalBot 0): fill it with bot members
         public string? ClientPublicAddress;
         public string? ClientLanAddress;
     }
@@ -551,6 +552,12 @@ public sealed class DiarkisUdpService(
             var ruleJson = rule.ToJsonString();
             logger.LogInformation("Practice push id=32126 data={Data}", ruleJson);
             await SendDatAsync(udp, session, CmdPracticeRoom, version, 0x01, request.Reply(32126, ruleJson), ct);
+
+            // Trial Match = the practice room with rivalBot 0 / normalRule 1 (live 2026-11-11). The room menu
+            // (MenuMatchCasual, sub_1409C0070 / vfunc_4_2) only allows start when the member list holds 8
+            // ("You need eight players for a trial match."), so the room is filled with 7 bot members.
+            session.PracticeTrial = (body["rivalBot"]?.GetValue<int>() ?? 1) == 0;
+            await SendPracticeMembersAsync(udp, session, version, request, ct);
             await SendPracticeCanOpenAsync(udp, session, version, request, ct);
         }
 
@@ -576,7 +583,7 @@ public sealed class DiarkisUdpService(
                 stageId = "1000";
             var matched = new JsonObject
             {
-                ["roleList"] = new JsonArray(new JsonObject { ["userId"] = request.UserId, ["role"] = role }),
+                ["roleList"] = TrialRoleList(session, request.UserId, role),
                 ["battleRoomId"] = $"{session.PracticeRoomId ?? "practice"}-battle",
                 ["stageId"] = stageId,
                 ["rivalPriorityPoint"] = 0,
@@ -670,11 +677,19 @@ public sealed class DiarkisUdpService(
             },
             ["sdpData"] = session.PracticeSdp ?? create["sdpData"]?.GetValue<string>() ?? string.Empty,
         };
+        var list = new JsonArray(member);
+        if (session.PracticeTrial)
+        {
+            var playerRole = desire["desiredRole"]?.GetValue<int>() ?? 1;
+            foreach (var bot in TrialBots(playerRole))
+                list.Add(bot.Member);
+        }
+
         var members = new JsonObject
         {
             ["roomId"] = session.PracticeRoomId ?? string.Empty,
             ["roomOwnerUserId"] = request.UserId,
-            ["roomMemberList"] = new JsonArray(member),
+            ["roomMemberList"] = list,
             // The list arrives in pages: total = number of pages, serial = this page (1-based). The client
             // (sub_140806A90) keeps a slot per page and applies the list once all pages are in; a serial
             // above total is dropped. Earlier we counted serial up (2, 3, ...) and every list after the
@@ -685,6 +700,57 @@ public sealed class DiarkisUdpService(
         var json = members.ToJsonString();
         logger.LogInformation("Practice push id=32101 data={Data}", json);
         await SendDatAsync(udp, session, CmdPracticeRoom, version, 0x01, request.Reply(32101, json), ct);
+    }
+
+    // The 7 bot members of a Trial Match room. One wants to be the Raider unless the player does (desiredRole:
+    // 0 Raider / 1 Survivor, MATCHMAKING_PROTOCOL.md section 3); the rest are survivors. Member layout as read
+    // by the client: userId, userData {userName, userRank, userRivalRank, desiredRole, desiredStageId,
+    // platform}, sdpData (JSON text; able_rematch true or the menu blocks start).
+    private static IEnumerable<(string UserId, int Role, JsonObject Member)> TrialBots(int playerRole)
+    {
+        for (var i = 1; i <= 7; i++)
+        {
+            var userId = $"BOT{i:D29}";
+            var name = $"BOT {i}";
+            var role = i == 1 && playerRole != 0 ? 0 : 1;
+            var sdp = new JsonObject
+            {
+                ["player_level"] = 1,
+                ["p2p_room_id"] = string.Empty,
+                ["p2p_uid"] = userId,
+                ["platform"] = 3,
+                ["pf_uid"] = "0",
+                ["patroller_name"] = role == 0 ? "RAIDER" : "SURVIVOR",
+                ["account_name"] = name,
+                ["able_rematch"] = true,
+                ["prac_update"] = false,
+            };
+            var member = new JsonObject
+            {
+                ["userId"] = userId,
+                ["userData"] = new JsonObject
+                {
+                    ["userName"] = name,
+                    ["userRank"] = 1,
+                    ["userRivalRank"] = 1,
+                    ["desiredRole"] = role,
+                    ["desiredStageId"] = "unselected",
+                    ["platform"] = 3,
+                },
+                ["sdpData"] = sdp.ToJsonString(),
+            };
+            yield return (userId, role, member);
+        }
+    }
+
+    // Match-found role list: the player, plus in a Trial Match the 7 bot members with their roles.
+    private static JsonArray TrialRoleList(Session session, string playerUserId, int playerRole)
+    {
+        var roles = new JsonArray(new JsonObject { ["userId"] = playerUserId, ["role"] = playerRole });
+        if (session.PracticeTrial)
+            foreach (var bot in TrialBots(playerRole))
+                roles.Add(new JsonObject { ["userId"] = bot.UserId, ["role"] = bot.Role });
+        return roles;
     }
 
     private async Task SendPracticeCanOpenAsync(
