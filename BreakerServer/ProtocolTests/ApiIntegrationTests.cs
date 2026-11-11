@@ -57,6 +57,18 @@ public sealed class ApiIntegrationTests : IClassFixture<BreakerApiFactory>
     }
 
     [Fact]
+    public async Task SelectableStageReturnsStatusAndList()
+    {
+        var token = await Authenticate(UserId, UserId);
+        using var response = await Post("/dbtb-prd/025348/api/season/get_selectable_stage", AuthenticatedBody(token));
+        var body = ObjectTree.List(ObjectTree.List(await ReadResponse(response))[1]);
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        Assert.Equal(0, ObjectTree.Int32(body[0]));
+        Assert.Empty(ObjectTree.List(body[1]));
+    }
+
+    [Fact]
     public async Task SameAccountGetsTheSameUserIdAtEveryLogin()
     {
         var first = await Authenticate(UserId, UserId);

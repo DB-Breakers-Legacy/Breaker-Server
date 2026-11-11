@@ -97,6 +97,15 @@ public static class ApiEndpoints
         api.MapPost("/adjustment_data_manage/get_version", (ApiResponseService responses) =>
             responses.Respond(new object?[] { 0, AdjustmentDataVersion }));
 
+        // Stages the player may pick before matching (ServerApiResponseGetSelectableBattleStage, parser
+        // 0x1407F4FF0 -> [status, list]; list reader 0x1407C7A80: array of [string, string]). Join step 17
+        // (sub_140816D90) keeps entries whose first string is all digits (the stage number, atoi) with the
+        // second string (Possible_ display name or period). Non-numeric entries are skipped and an empty list
+        // is accepted (the player then sends desiredStageId "unselected"). Missing, the 404 made practice
+        // show "failed to connect" (live test 2026-11-10). Empty until we know the real stage numbers.
+        api.MapPost("/season/get_selectable_stage", (ApiResponseService responses) =>
+            responses.Respond(new object?[] { 0, Array.Empty<object?>() }));
+
         api.MapPost("/battle/get_stun_server_info", (
             ApiResponseService responses,
             IOptions<BreakerOptions> options) =>
