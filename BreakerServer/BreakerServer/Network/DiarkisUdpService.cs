@@ -34,12 +34,16 @@ public sealed class DiarkisUdpService(
     private static readonly byte[] InitMarker = [0xA0, 0x01, 0x00, 0x00];
     private static readonly byte[] RedirectMarker = [0xBE, 0xEF, 0xFE, 0xED];
 
-    private const ushort CmdInitOrHeartbeat = 0x0001;
-    private const ushort CmdRedirect = 0x0002;
-    private const ushort CmdServerAddressPush = 0x012F;
-    private const ushort CmdBootstrapRequest = 0x0130;
-    private const ushort CmdBootstrapFiller = 0x0131;
+    // Command names from the client's own name table (sub_140DA1470 in the game exe).
+    private const ushort CmdInitOrHeartbeat = 0x0001;           // 1   "TcpHeartbeat / UdpEcho"
+    private const ushort CmdRedirect = 0x0002;                  // 2   "Reconnect"
+    private const ushort CmdUdpRequestHolePunch = 0x012F;       // 303 server -> client: punch toward this address
+    private const ushort CmdUdpNotifyHolePunchDone = 0x0130;    // 304 client -> server: punch done
+    private const ushort CmdUdpCheckNatType = 0x0131;           // 305 client -> server (16 zero bytes)
     private const ushort CmdConnectionRoomProbe = 0x55F0;
+    // Captures show exactly two hole-punch requests per matching session (UdpPort, then UdpSessionPort).
+    // Answering every "done" with a new request loops forever (seen live on 2026-11-10).
+    private const int HolePunchRequestsPerSession = 2;
 
     private sealed class Session(string sid, DiarkisKeySet keys, IPEndPoint remote)
     {
@@ -52,6 +56,7 @@ public sealed class DiarkisUdpService(
         public SortedDictionary<int, byte[]> Unacked { get; } = [];  // our DAT seq -> command envelope
         public FragmentReassembler Fragments { get; } = new();
         public bool Bootstrapped;
+        public int HolePunchRequests;
         public string? ClientPublicAddress;
         public string? ClientLanAddress;
     }
@@ -317,10 +322,14 @@ public sealed class DiarkisUdpService(
             case CmdInitOrHeartbeat:
                 await HandleInitOrHeartbeatAsync(udp, session, version, plaintext, remote, ct);
                 return;
-            case CmdBootstrapRequest when !sessionListener:
-                await PushServerAddressAsync(udp, session, SessionAddress, ct);
+            case CmdUdpNotifyHolePunchDone when !sessionListener:
+                // After the first punch (toward UdpPort) ask for the second (toward UdpSessionPort); then stop.
+                if (session.HolePunchRequests < HolePunchRequestsPerSession)
+                    await RequestHolePunchAsync(udp, session, SessionAddress, ct);
                 return;
-            case CmdBootstrapFiller:
+            case CmdUdpNotifyHolePunchDone:
+                return;
+            case CmdUdpCheckNatType:
                 return;  // 16 zero bytes; the ACK was already sent
             case CmdConnectionRoomProbe when sessionListener:
                 await SendDatAsync(udp, session, CmdRedirect, 0, 0xFF,
@@ -360,15 +369,16 @@ public sealed class DiarkisUdpService(
         if (!sessionListener && !session.Bootstrapped)
         {
             session.Bootstrapped = true;
-            await PushServerAddressAsync(udp, session, MatchingAddress, ct);
+            await RequestHolePunchAsync(udp, session, MatchingAddress, ct);
         }
     }
 
-    private Task PushServerAddressAsync(UdpClient udp, Session session, string address, CancellationToken ct)
+    private Task RequestHolePunchAsync(UdpClient udp, Session session, string address, CancellationToken ct)
     {
+        session.HolePunchRequests++;
         var text = Encoding.ASCII.GetBytes(address);
-        byte[] pushed = [(byte)(text.Length >> 8), (byte)text.Length, .. text];
-        return SendDatAsync(udp, session, CmdServerAddressPush, 1, 0xFF, pushed, ct);
+        byte[] request = [(byte)(text.Length >> 8), (byte)text.Length, .. text];
+        return SendDatAsync(udp, session, CmdUdpRequestHolePunch, 1, 0xFF, request, ct);
     }
 
     private static bool TryParseInitAddresses(byte[] plaintext, out string? publicAddress, out string? lanAddress)

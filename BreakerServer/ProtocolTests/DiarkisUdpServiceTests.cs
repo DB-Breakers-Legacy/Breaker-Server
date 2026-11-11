@@ -77,6 +77,40 @@ public sealed class DiarkisUdpServiceTests
     }
 
     [Fact]
+    public async Task HolePunchRequestsStopAfterTheSecondDone()
+    {
+        // 0x012F = UdpRequestHolePunch, 0x0130 = UdpNotifyHolePunchDone (client name table).
+        // Live client 2026-11-10: answering every "done" with a new request looped ~800,000 times.
+        var registry = new SessionKeyRegistry();
+        var issued = registry.Create();
+        await using var harness = await Harness.StartAsync(registry, sessionListener: false);
+        var sid = Convert.FromHexString(issued.Sid);
+        registry.TryResolve(sid, out var keys);
+
+        await harness.SendAndReceiveAsync(DiarkisPacketFactory.Combine(DatagramHeader.Pack(0, 2), sid));
+        await harness.SendAsync(ClientDat(0, 0x0001, sid, InitPlaintext, keys!));
+        await harness.ReceiveAsync();                                          // ACK 0
+        await harness.ReceiveAsync();                                          // 0x0001 reply (seq 0)
+        var first = Open(await harness.ReceiveAsync(), keys!);                 // request 1 (seq 1)
+        Assert.Equal(0x012F, first.Command);
+        await harness.SendAsync(DiarkisPacketFactory.Combine(DatagramHeader.Pack(0, 4), sid));
+        await harness.SendAsync(DiarkisPacketFactory.Combine(DatagramHeader.Pack(1, 4), sid));
+
+        await harness.SendAsync(ClientDat(1, 0x0130, sid, [], keys!));
+        Assert.Equal(DiarkisPacketFactory.Ack(1), await harness.ReceiveAsync());
+        var second = await harness.ReceiveAsync();                             // request 2 (seq 2)
+        var (command, _, plaintext) = Open(second, keys!);
+        var sessionAddress = $"127.0.0.1:{harness.Options.UdpSessionPort}";
+        Assert.Equal(0x012F, command);
+        Assert.Equal([0, (byte)sessionAddress.Length, .. Encoding.ASCII.GetBytes(sessionAddress)], plaintext);
+        await harness.SendAsync(DiarkisPacketFactory.Combine(DatagramHeader.Pack(2, 4), sid));
+
+        await harness.SendAsync(ClientDat(2, 0x0130, sid, [], keys!));
+        Assert.Equal(DiarkisPacketFactory.Ack(2), await harness.ReceiveAsync());
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => harness.ReceiveAsync(TimeSpan.FromMilliseconds(800)));
+    }
+
+    [Fact]
     public async Task ClientResendIsAcknowledgedButNotProcessedTwice()
     {
         var registry = new SessionKeyRegistry();
