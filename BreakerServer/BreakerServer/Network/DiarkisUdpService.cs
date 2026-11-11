@@ -64,6 +64,9 @@ public sealed class DiarkisUdpService(
         public int HolePunchRequests;
         public Dictionary<int, int> ResendCounts { get; } = [];
         public string? PracticeRoomId;
+        public JsonObject? PracticeCreate;   // the player's 32000 request body (name, ranks, sdpData, ...)
+        public JsonObject? PracticeDesire;   // the player's 32012 request body (desiredRole, desiredStageId)
+        public int PracticeSerial;
         public string? ClientPublicAddress;
         public string? ClientLanAddress;
     }
@@ -465,6 +468,7 @@ public sealed class DiarkisUdpService(
             case 32000: // PracticeRoomCreate -> 33000
             case 32001: // PracticeRoomJoin -> 33001
                 session.PracticeRoomId ??= $"practice{Interlocked.Increment(ref _roomCounter):D6}";
+                session.PracticeCreate = body;
                 reply["roomId"] = session.PracticeRoomId;
                 reply["roomKey"] = "0000";
                 reply["roomData"] = new JsonObject { ["gameRule"] = body["gameRule"]?.GetValue<int>() ?? 0 };
@@ -488,17 +492,57 @@ public sealed class DiarkisUdpService(
         logger.LogInformation("Practice reply id={Id} data={Data}", replyId, json);
         await SendDatAsync(udp, session, CmdPracticeRoom, version, 0x01, request.Reply(replyId, json), ct);
 
-        // Practice against the bot has no other players to wait for: once the client has sent its role
-        // request (32012), tell it the match is found (32105 ProtocolNotifyPracticeRoomOnMatchingComplete).
+        // Notifies go through the same response path as the replies: the client's decoder queues both by
+        // message id.
+        //
+        // 32101 member list. After the role request, Join state 22 (0x140815DA0 case 21) waits until the
+        // room member list (MatchingModule+0x208, filled from this notify) holds the player's own userId
+        // (sub_140806E50 compares it with SysCosmos+0xF8, the login userId). Reader: room id variant of
+        // sub_140780D40 -> roomId, roomOwnerUserId, roomMemberList, total, serial (all required);
+        // member sub_1407A0420 -> userId, userData, sdpData; userData sub_1407A07C0 -> userName, userRank,
+        // userRivalRank, desiredRole, desiredStageId, platform (all required). Live test 2026-11-10.
+        if (request.Id == 32012)
+        {
+            session.PracticeDesire = body;
+            var create = session.PracticeCreate ?? [];
+            var member = new JsonObject
+            {
+                ["userId"] = request.UserId,
+                ["userData"] = new JsonObject
+                {
+                    ["userName"] = create["userName"]?.GetValue<string>() ?? "Player",
+                    ["userRank"] = create["userRank"]?.GetValue<int>() ?? 1,
+                    ["userRivalRank"] = create["userRivalRank"]?.GetValue<int>() ?? 1,
+                    ["desiredRole"] = body["desiredRole"]?.GetValue<int>() ?? 1,
+                    ["desiredStageId"] = body["desiredStageId"]?.GetValue<string>() ?? "unselected",
+                    ["platform"] = 3,
+                },
+                ["sdpData"] = create["sdpData"]?.GetValue<string>() ?? string.Empty,
+            };
+            var members = new JsonObject
+            {
+                ["roomId"] = session.PracticeRoomId ?? string.Empty,
+                ["roomOwnerUserId"] = request.UserId,
+                ["roomMemberList"] = new JsonArray(member),
+                ["total"] = 1,
+                ["serial"] = ++session.PracticeSerial,
+            };
+            var membersJson = members.ToJsonString();
+            logger.LogInformation("Practice push id=32101 data={Data}", membersJson);
+            await SendDatAsync(udp, session, CmdPracticeRoom, version, 0x01, request.Reply(32101, membersJson), ct);
+        }
+
+        // Practice against the bot has no other players to wait for: once the room is opened (32017),
+        // tell the client the match is found (32105 ProtocolNotifyPracticeRoomOnMatchingComplete).
         // Rules (MATCHMAKING_PROTOCOL.md section 8): all five keys present; roleList entries {userId, role}
         // for members the client knows (here only the player; Possible_ the bot is added by the client from
         // rivalBot); stageId must be a stage the client knows (we echo desiredStageId, e.g. "1000").
         // The client accepts it only in matching states 0/14/15, so it goes out after a short delay.
-        // Sent through the same response path as the replies: the client's decoder queues both by message id.
-        if (request.Id == 32012)
+        if (request.Id == 32017)
         {
-            var role = body["desiredRole"]?.GetValue<int>() ?? 1;
-            var stageId = body["desiredStageId"]?.GetValue<string>() ?? "1000";
+            var desire = session.PracticeDesire ?? [];
+            var role = desire["desiredRole"]?.GetValue<int>() ?? 1;
+            var stageId = desire["desiredStageId"]?.GetValue<string>() ?? "1000";
             if (stageId == "unselected")
                 stageId = "1000";
             var matched = new JsonObject
