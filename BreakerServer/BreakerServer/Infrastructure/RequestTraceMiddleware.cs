@@ -8,6 +8,12 @@ public sealed class RequestTraceMiddleware(
     ILogger<RequestTraceMiddleware> logger)
 {
     private const int PreviewLimit = 256;
+    private const int CaptureLimit = 16 * 1024 * 1024;
+
+    // Opt-in research aid: when BREAKER_CAPTURE_DIR is set, every request body is also saved whole to
+    // <dir>/<time>_<path>.bin, so client payloads (avatar data, tutorial steps...) can be studied offline.
+    private static readonly string? CaptureDirectory = Environment.GetEnvironmentVariable("BREAKER_CAPTURE_DIR");
+    private static int _captureCounter;
 
     public async Task InvokeAsync(HttpContext context)
     {
@@ -27,6 +33,9 @@ public sealed class RequestTraceMiddleware(
                 context.Request.ContentLength ?? body.LongLength,
                 FormatPreview(body));
         }
+
+        if (!string.IsNullOrWhiteSpace(CaptureDirectory))
+            await CaptureAsync(context.Request, context.RequestAborted);
 
         var stopwatch = Stopwatch.StartNew();
         try
@@ -56,6 +65,31 @@ public sealed class RequestTraceMiddleware(
                     context.Response.StatusCode,
                     stopwatch.ElapsedMilliseconds);
             }
+        }
+    }
+
+    private async Task CaptureAsync(HttpRequest request, CancellationToken ct)
+    {
+        try
+        {
+            if (request.ContentLength is not > 0)
+                return;
+            request.Body.Position = 0;
+            using var buffer = new MemoryStream();
+            await request.Body.CopyToAsync(buffer, ct);
+            request.Body.Position = 0;
+            if (buffer.Length > CaptureLimit)
+                return;
+
+            Directory.CreateDirectory(CaptureDirectory!);
+            var name = (request.Path.Value ?? "root").Trim('/').Replace('/', '_');
+            var file = Path.Combine(CaptureDirectory!,
+                $"{DateTime.Now:HHmmss}_{Interlocked.Increment(ref _captureCounter):D4}_{name}.bin");
+            await File.WriteAllBytesAsync(file, buffer.ToArray(), ct);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            logger.LogWarning(ex, "Request capture failed");
         }
     }
 
