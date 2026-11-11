@@ -49,6 +49,25 @@ namespace
     constexpr std::size_t kLookSize = 0x440;                   // AvatarVisual bytes used by the copy
     constexpr std::uintptr_t kLocalPlayerSlot = 0x66B8;        // slots + 0x66B8 = the local player's slot index
 
+    // Follower. The tutorial brain (SimpleAIOrientation) has a "follow a character" state 30000 (0x7530,
+    // sub_1402C08C0 case 0: target handle at AI+0x184C) that ends after ~2 s. The follower bot is sent back
+    // into it whenever it is more than kFollowDistance from the player.
+    constexpr std::uintptr_t kAiUpdateRva = 0x2BE6E0;          // SimpleAIOrientation update (vtable slot 1)
+    constexpr std::uintptr_t kCharacterTableRva = 0x33B9600;   // handle table: 16-byte entries, character* at +0
+    constexpr std::uint32_t kCharacterTableSize = 0x2000;
+    constexpr std::uintptr_t kAiCharacterHandle = 0x14;
+    constexpr std::uintptr_t kAiState = 0x1784;
+    constexpr std::uintptr_t kAiNextState = 0x178C;
+    constexpr std::uintptr_t kAiFollowTarget = 0x184C;
+    constexpr std::uint32_t kStateFollow = 0x7530;
+    constexpr std::uint32_t kStateDowned = 0x2738;
+    constexpr std::uintptr_t kCharSlot = 0x1F4;                 // player slot (UnitCharacter ctor arg)
+    constexpr std::uintptr_t kCharRole = 0x204;                 // 0 survivor, 1 raider
+    constexpr std::uintptr_t kCharHandle = 0x48;                // own handle in the table
+    constexpr std::uintptr_t kCharPosition = 0x60;              // x, y, z floats
+    constexpr std::uintptr_t kCharFlags = 0xA18;                // 0x20000000 = downed
+    constexpr float kFollowDistance = 5.0f;
+
     constexpr std::uint32_t kSlotCount = 8;
     constexpr std::uint32_t kAiModeOrientation = 6;
 
@@ -58,10 +77,16 @@ namespace
     using TutorialGetFn = std::uintptr_t(__fastcall*)(std::uintptr_t);
     using StringAssignFn = void*(__fastcall*)(void*, const char*, std::size_t);
     using CopyLookFn = std::uint8_t(__fastcall*)(std::uintptr_t, const void*);
+    using AiUpdateFn = std::uint64_t(__fastcall*)(std::uintptr_t, float);
 
     std::uintptr_t g_Base = 0;
     int g_BotCount = 0;
     bool g_RaiderBot = true;
+    int g_FollowerBot = 0;                       // survivor_bot_follow: which bot (1-7) follows the player, 0 = none
+    std::uint32_t g_FollowerSlot = 0xFFFFFFFF;   // slot of that bot in the current match
+    std::uint32_t g_PlayerHandle = 0;
+    void* g_AiUpdateTarget = nullptr;
+    AiUpdateFn g_OriginalAiUpdate = nullptr;
     std::array<std::string, 7> g_BotLooks;   // survivor_bot_look1..7 = name of a .look file in BreakersRevived\looks
     void* g_AddRaiderBotTarget = nullptr;
     AddRaiderBotFn g_OriginalAddRaiderBot = nullptr;
@@ -130,6 +155,66 @@ namespace
         auto copyLook = reinterpret_cast<CopyLookFn>(g_Base + kCopyLookRva);
         copyLook(slot + kSlotLookContainer, buffer.data());
         Logger::Info("PracticeBots: bot in slot " + std::to_string(index) + " wears look '" + name + "'");
+    }
+
+    std::uintptr_t CharacterAt(std::uint32_t handle)
+    {
+        if (handle == 0 || handle >= kCharacterTableSize)
+            return 0;
+        return At<std::uintptr_t>(g_Base + kCharacterTableRva + static_cast<std::uintptr_t>(handle) * 16);
+    }
+
+    // The local player's character: cached handle, re-found by scanning the table when it stops matching.
+    std::uintptr_t FindPlayer()
+    {
+        const std::uintptr_t slots = At<std::uintptr_t>(g_Base + kGameGlobalPtrRva);
+        if (slots == 0)
+            return 0;
+        const std::uint32_t playerSlot = At<std::uint32_t>(slots + kLocalPlayerSlot);
+        std::uintptr_t player = CharacterAt(g_PlayerHandle);
+        if (player != 0 && At<std::uint32_t>(player + kCharSlot) == playerSlot)
+            return player;
+
+        for (std::uint32_t h = 1; h < kCharacterTableSize; ++h)
+        {
+            const std::uintptr_t c = CharacterAt(h);
+            if (c != 0 && At<std::uint32_t>(c + kCharHandle) == h && At<std::uint32_t>(c + kCharSlot) == playerSlot)
+            {
+                g_PlayerHandle = h;
+                Logger::Info("PracticeBots: player character handle " + std::to_string(h) +
+                    " (slot " + std::to_string(playerSlot) + ")");
+                return c;
+            }
+        }
+        return 0;
+    }
+
+    std::uint64_t __fastcall AiUpdateDetour(std::uintptr_t ai, float dt)
+    {
+        if (g_FollowerSlot < kSlotCount)
+        {
+            const std::uintptr_t bot = CharacterAt(At<std::uint32_t>(ai + kAiCharacterHandle));
+            if (bot != 0 && At<std::uint32_t>(bot + kCharSlot) == g_FollowerSlot &&
+                (At<std::uint32_t>(bot + kCharFlags) & 0x20000000) == 0)
+            {
+                const std::uintptr_t player = FindPlayer();
+                if (player != 0)
+                {
+                    const float* a = reinterpret_cast<const float*>(bot + kCharPosition);
+                    const float* b = reinterpret_cast<const float*>(player + kCharPosition);
+                    const float dx = a[0] - b[0], dy = a[1] - b[1], dz = a[2] - b[2];
+                    const std::uint32_t state = At<std::uint32_t>(ai + kAiState);
+                    const std::int32_t next = At<std::int32_t>(ai + kAiNextState);
+                    if (dx * dx + dy * dy + dz * dz > kFollowDistance * kFollowDistance &&
+                        state != kStateFollow && state != kStateDowned && next < 0)
+                    {
+                        At<std::uint32_t>(ai + kAiFollowTarget) = g_PlayerHandle;
+                        At<std::uint32_t>(ai + kAiNextState) = kStateFollow;
+                    }
+                }
+            }
+        }
+        return g_OriginalAiUpdate(ai, dt);
     }
 
     std::uintptr_t __fastcall GuardedTutorialGet(std::uintptr_t manager)
@@ -206,6 +291,8 @@ namespace
                 "; tutorialManager=" + Hex(At<std::uintptr_t>(slots + kTutorialManager)));
 
             CapturePlayerLook(slots);
+            g_FollowerSlot = 0xFFFFFFFF;
+            g_PlayerHandle = 0;
 
             int added = 0;
             for (std::uint32_t i = 1; i < kSlotCount && added < g_BotCount; ++i)
@@ -215,6 +302,12 @@ namespace
                 AddSurvivorBot(slots, i, added + 1);
                 ApplyLook(slots, i, g_BotLooks[static_cast<std::size_t>(added)]);
                 ++added;
+                if (added == g_FollowerBot)
+                {
+                    g_FollowerSlot = i;
+                    Logger::Info("PracticeBots: SURVIVOR BOT " + std::to_string(added) + " (slot " +
+                        std::to_string(i) + ") follows the player");
+                }
             }
             Logger::Info("PracticeBots: added " + std::to_string(added) + " survivor bot(s)");
         }
@@ -252,6 +345,9 @@ bool PracticeBots::Init()
     if (g_BotCount > 7)
         g_BotCount = 7;
     Logger::Info("PracticeBots: up to " + std::to_string(g_BotCount) + " survivor bot(s) per practice match");
+    g_FollowerBot = GetPrivateProfileIntA("steam", "survivor_bot_follow", 0, SteamConfig::GetPath().c_str());
+    if (g_FollowerBot > 0)
+        Logger::Info("PracticeBots: survivor bot " + std::to_string(g_FollowerBot) + " will follow the player");
     for (std::size_t i = 0; i < g_BotLooks.size(); ++i)
     {
         char value[128] = {};
@@ -271,6 +367,11 @@ bool PracticeBots::Init()
     const bool add = Hook(kLobbyStartRva, reinterpret_cast<void*>(&LobbyStartDetour),
         reinterpret_cast<void**>(&g_OriginalLobbyStart), &g_LobbyStartTarget, "sub_14067B260 (lobby match start)");
 
+    bool follow = true;
+    if (g_FollowerBot > 0)
+        follow = Hook(kAiUpdateRva, reinterpret_cast<void*>(&AiUpdateDetour),
+            reinterpret_cast<void**>(&g_OriginalAiUpdate), &g_AiUpdateTarget, "0x1402BE6E0 (tutorial AI update, follower)");
+
     g_RaiderBot = GetPrivateProfileIntA("steam", "practice_raider_bot", 1, SteamConfig::GetPath().c_str()) != 0;
     bool raider = true;
     if (!g_RaiderBot)
@@ -279,7 +380,7 @@ bool PracticeBots::Init()
             reinterpret_cast<void**>(&g_OriginalAddRaiderBot), &g_AddRaiderBotTarget, "sub_1408BF360 (Raider bot off)");
         Logger::Info("PracticeBots: practice Raider bot switched off (practice_raider_bot=0)");
     }
-    return guard && add && raider;
+    return guard && add && raider && follow;
 }
 
 void PracticeBots::Shutdown()
@@ -289,6 +390,9 @@ void PracticeBots::Shutdown()
     if (g_AddRaiderBotTarget)
         HookManager::Disable(g_AddRaiderBotTarget);
     g_AddRaiderBotTarget = nullptr;
+    if (g_AiUpdateTarget)
+        HookManager::Disable(g_AiUpdateTarget);
+    g_AiUpdateTarget = nullptr;
     if (g_TutorialGetTarget)
         HookManager::Disable(g_TutorialGetTarget);
     g_LobbyStartTarget = nullptr;
