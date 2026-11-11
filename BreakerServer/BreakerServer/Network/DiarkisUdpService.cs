@@ -550,6 +550,13 @@ public sealed class DiarkisUdpService(
         // The client accepts it only in matching states 0/14/15, so it goes out after a short delay.
         if (request.Id == 32017)
         {
+            // 32118 ProtocolNotifyPracticeOpenRoom {roomId}: the Open module (0x14081E030, state 4) waits
+            // for both the 33017 reply (+0x2C) and this notify (+0x2D); after 30 s without both it fails
+            // with error 1402 (client showed 330001402, "the room was not made public"; live 2026-11-10).
+            var openJson = new JsonObject { ["roomId"] = session.PracticeRoomId ?? string.Empty }.ToJsonString();
+            logger.LogInformation("Practice push id=32118 data={Data}", openJson);
+            await SendDatAsync(udp, session, CmdPracticeRoom, version, 0x01, request.Reply(32118, openJson), ct);
+
             var desire = session.PracticeDesire ?? [];
             var role = desire["desiredRole"]?.GetValue<int>() ?? 1;
             var stageId = desire["desiredStageId"]?.GetValue<string>() ?? "1000";
