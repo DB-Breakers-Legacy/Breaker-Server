@@ -25,6 +25,7 @@ builder.Services.AddSingleton<StarterDataStore>();
 builder.Services.AddSingleton<SessionTokenService>();
 builder.Services.AddSingleton<SessionKeyRegistry>();
 builder.Services.AddSingleton<AuthSessionRegistry>();
+builder.Services.AddSingleton<AccountTokenService>();
 // Two listeners of the same class: AddHostedService would keep only the first registration
 // (it de-duplicates by implementation type), so the session listener on UdpSessionPort never started.
 builder.Services.AddSingleton<IHostedService>(services => new DiarkisUdpService(

@@ -43,6 +43,16 @@ public sealed class ApiIntegrationTests : IClassFixture<BreakerApiFactory>
     }
 
     [Fact]
+    public async Task SameAccountGetsTheSameUserIdAtEveryLogin()
+    {
+        var first = await Authenticate(UserId, UserId);
+        var second = await Authenticate(UserId, UserId);
+
+        Assert.Equal(first, second);
+        Assert.NotEqual(UserId.ToString(), first);
+    }
+
+    [Fact]
     public async Task MismatchedLocalTicketIsRejected()
     {
         using var response = await Post("/025348/api/user/auth", AuthBody(UserId, UserId + 1));

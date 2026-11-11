@@ -7,6 +7,7 @@ public sealed record UserAuthResult(bool Success, string AuthToken, string Ticke
 public sealed class UserAuthService(
     AccountService accounts,
     AuthSessionRegistry sessions,
+    AccountTokenService tokens,
     ILogger<UserAuthService> logger)
 {
     public async Task<UserAuthResult> AuthenticateAsync(UserAuthRequest request, CancellationToken ct)
@@ -24,7 +25,7 @@ public sealed class UserAuthService(
             return Failure("Local ticket does not match the requested user.");
 
         await accounts.GetOrCreateAsync(request.NumericId, ct);
-        var session = sessions.Create(request.NumericId, localTicket.Serial);
+        var session = sessions.Create(request.NumericId, localTicket.Serial, tokens.TokenFor(request.NumericId));
 
         logger.LogInformation(
             "user/auth accepted numericId={NumericId} arg3={Argument3} ticketBytes={TicketBytes} serial={Serial}",
