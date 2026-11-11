@@ -700,8 +700,13 @@ public sealed class DiarkisUdpService(
         }
     }
 
+    // With battleRoomId set it sends the casual battle-room list instead (12102
+    // ProtocolNotifyCasualBattleRoomOnMemberDataChange, player only): the casual Matching module checks every
+    // roleList userId against this list (CasualMatchingModule +0x360, filled by callback slot 49 0x140802DD0 ->
+    // 0x14080C660) and fails with error 1620 when a member is missing (live 2026-11-11, error 320001620).
     private async Task SendPracticeMembersAsync(
-        UdpClient udp, Session session, byte version, GameMessage request, CancellationToken ct)
+        UdpClient udp, Session session, byte version, GameMessage request, CancellationToken ct,
+        string? battleRoomId = null)
     {
         var create = session.PracticeCreate ?? [];
         var desire = session.PracticeDesire ?? [];
@@ -720,7 +725,7 @@ public sealed class DiarkisUdpService(
             ["sdpData"] = session.PracticeSdp ?? create["sdpData"]?.GetValue<string>() ?? string.Empty,
         };
         var list = new JsonArray(member);
-        if (session.PracticeTrial)
+        if (session.PracticeTrial && battleRoomId is null)
         {
             var playerRole = desire["desiredRole"]?.GetValue<int>() ?? 1;
             foreach (var bot in TrialBots(playerRole))
@@ -737,15 +742,16 @@ public sealed class DiarkisUdpService(
         {
             var members = new JsonObject
             {
-                ["roomId"] = session.PracticeRoomId ?? string.Empty,
+                [battleRoomId is null ? "roomId" : "battleRoomId"] = battleRoomId ?? session.PracticeRoomId ?? string.Empty,
                 ["roomOwnerUserId"] = request.UserId,
                 ["roomMemberList"] = new JsonArray(pages[page]),
                 ["total"] = pages.Count,
                 ["serial"] = page + 1,
             };
             var json = members.ToJsonString();
-            logger.LogInformation("Room push id={Id} page {Page}/{Total} data={Data}", session.RoomBase + 101, page + 1, pages.Count, json);
-            await SendDatAsync(udp, session, session.RoomBase, version, 0x01, request.Reply(session.RoomBase + 101, json), ct);
+            var id = session.RoomBase + (battleRoomId is null ? 101 : 102);
+            logger.LogInformation("Room push id={Id} page {Page}/{Total} data={Data}", id, page + 1, pages.Count, json);
+            await SendDatAsync(udp, session, session.RoomBase, version, 0x01, request.Reply(id, json), ct);
         }
     }
 
@@ -826,10 +832,12 @@ public sealed class DiarkisUdpService(
             var stageId = desire["desiredStageId"]?.GetValue<string>() ?? "1000";
             if (stageId == "unselected")
                 stageId = "1000";
+            var battleRoomId = $"{session.PracticeRoomId ?? "casual"}-battle";
+            await SendPracticeMembersAsync(udp, session, version, request, ct, battleRoomId);
             var matched = new JsonObject
             {
                 ["roleList"] = TrialRoleList(session, request.UserId, role),
-                ["battleRoomId"] = $"{session.PracticeRoomId ?? "casual"}-battle",
+                ["battleRoomId"] = battleRoomId,
                 ["stageId"] = stageId,
                 ["rivalPriorityPoint"] = 0,
                 ["patrollerPriorityPoint"] = 0,
