@@ -586,8 +586,8 @@ public sealed class DiarkisUdpService(
     // {connectionRoomId} (live: the practice roomId) -> 43000 {status, diarkisRoomId}; 42001 Join -> 43001;
     // 42004 UpdateMatchedSdp {connectionRoomId, sdpData} -> 43004; 42005 CheckBattleFinish -> 43005
     // {status, userList}. Unanswered 42000 ended in error 330001402 ("room was not made public").
-    // After the player's SDP update, 42100 BattleRoomAllJoined {roomMemberList: [{userId}]} (Possible_ the
-    // signal to start; the bot is not a member).
+    // After the create / join reply, 42100 BattleRoomAllJoined {roomMemberList: [{userId}]} (the bot is not
+    // a member).
     private async Task HandlePracticeConnectionAsync(UdpClient udp, Session session, byte version, byte[] plaintext, CancellationToken ct)
     {
         CaptureCommand(CmdPracticeConnection, version, plaintext);
@@ -625,7 +625,10 @@ public sealed class DiarkisUdpService(
         logger.LogInformation("Connection reply id={Id} data={Data}", replyId, json);
         await SendDatAsync(udp, session, CmdPracticeConnection, version, 0x01, request.Reply(replyId, json), ct);
 
-        if (request.Id == 42004)
+        // 42100 sets Matching+0x120 (optional, flag +0x140; slot 81 0x140819DB0). Matching state 4 waits for
+        // +0x1D0 (43000 reply) and +0x140, and only then moves on to the SDP update (42004, state 6), so the
+        // notify goes right after the create / join reply (live 2026-11-10: stuck in state 4).
+        if (request.Id is 42000 or 42001)
         {
             var joined = new JsonObject
             {
