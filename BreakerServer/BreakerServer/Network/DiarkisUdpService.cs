@@ -748,14 +748,14 @@ public sealed class DiarkisUdpService(
         }
     }
 
-    // Match-found role list: the player, plus in a Trial Match the 7 bot members with their roles.
+    // Match-found role list: only the player, also in a Trial Match. With the 7 bot members in it the client
+    // went on to wait for their connection data / P2P links in the connection room ("establishing the
+    // connection", 2026-11-11). The bots are only needed in the room list (the 8-member start check); in the
+    // match they are added locally by the client DLL (PracticeBots, survivor_bots=7), as in practice.
     private static JsonArray TrialRoleList(Session session, string playerUserId, int playerRole)
     {
-        var roles = new JsonArray(new JsonObject { ["userId"] = playerUserId, ["role"] = playerRole });
-        if (session.PracticeTrial)
-            foreach (var bot in TrialBots(playerRole))
-                roles.Add(new JsonObject { ["userId"] = bot.UserId, ["role"] = bot.Role });
-        return roles;
+        _ = session;
+        return new JsonArray(new JsonObject { ["userId"] = playerUserId, ["role"] = playerRole });
     }
 
     private async Task SendPracticeCanOpenAsync(
