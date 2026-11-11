@@ -67,6 +67,7 @@ public sealed class DiarkisUdpService(
         public JsonObject? PracticeCreate;   // the player's 32000 request body (name, ranks, sdpData, ...)
         public JsonObject? PracticeDesire;   // the player's 32012 request body (desiredRole, desiredStageId)
         public int PracticeSerial;
+        public string? PracticeSdp;          // latest sdpData from 32005 (member data set)
         public string? ClientPublicAddress;
         public string? ClientLanAddress;
     }
@@ -504,44 +505,30 @@ public sealed class DiarkisUdpService(
         if (request.Id == 32012)
         {
             session.PracticeDesire = body;
-            var create = session.PracticeCreate ?? [];
-            var member = new JsonObject
-            {
-                ["userId"] = request.UserId,
-                ["userData"] = new JsonObject
-                {
-                    ["userName"] = create["userName"]?.GetValue<string>() ?? "Player",
-                    ["userRank"] = create["userRank"]?.GetValue<int>() ?? 1,
-                    ["userRivalRank"] = create["userRivalRank"]?.GetValue<int>() ?? 1,
-                    ["desiredRole"] = body["desiredRole"]?.GetValue<int>() ?? 1,
-                    ["desiredStageId"] = body["desiredStageId"]?.GetValue<string>() ?? "unselected",
-                    ["platform"] = 3,
-                },
-                ["sdpData"] = create["sdpData"]?.GetValue<string>() ?? string.Empty,
-            };
-            var members = new JsonObject
-            {
-                ["roomId"] = session.PracticeRoomId ?? string.Empty,
-                ["roomOwnerUserId"] = request.UserId,
-                ["roomMemberList"] = new JsonArray(member),
-                ["total"] = 1,
-                ["serial"] = ++session.PracticeSerial,
-            };
-            var membersJson = members.ToJsonString();
-            logger.LogInformation("Practice push id=32101 data={Data}", membersJson);
-            await SendDatAsync(udp, session, CmdPracticeRoom, version, 0x01, request.Reply(32101, membersJson), ct);
+            await SendPracticeMembersAsync(udp, session, version, request, ct);
+        }
+
+        // 32005 member data set: the client sends its current sdpData (e.g. "able_rematch":true, which the
+        // room creation sdpData had as false). The lobby menu (sub_1409C0070) shows start only when every
+        // member has sdp able_rematch (entry +0x1A0 = sdp +0x110, parser sub_140800990) and the can-open
+        // flag (+0x1BA, set by 32120); otherwise MenuMatchCasual+0x88 = 3 and start is hidden (live
+        // 2026-11-10). So store it, re-send the member list, then 32120 again.
+        if (request.Id == 32005)
+        {
+            if (body["sdpData"]?.GetValue<string>() is { Length: > 0 } sdp)
+                session.PracticeSdp = sdp;
+            await SendPracticeMembersAsync(udp, session, version, request, ct);
+            await SendPracticeCanOpenAsync(udp, session, version, request, ct);
         }
 
         // After the owner sets the practice rules (32026): echo them to the room (32126 ChangePracticeRule)
-        // and tell the owner the room may be opened (32120 ProtocolNotifyPracticeCanOpen {roomId}).
-        // Live test 2026-11-10: in the practice lobby with the Join module finished and the Open module
-        // idle, the only menu option was "display room key" - no start. Possible_: 32120 enables start.
+        // and tell the owner the room may be opened (32120 ProtocolNotifyPracticeCanOpen {roomId};
+        // PracticeMatchingModule slot 74 sub_140802F30 sets +0x1BA on every member entry).
         if (request.Id == 32026)
         {
-            var roomId = session.PracticeRoomId ?? string.Empty;
             var rule = new JsonObject
             {
-                ["roomId"] = roomId,
+                ["roomId"] = session.PracticeRoomId ?? string.Empty,
                 ["rivalBot"] = body["rivalBot"]?.GetValue<int>() ?? 1,
                 ["normalRule"] = body["normalRule"]?.GetValue<int>() ?? 0,
                 ["coolDown"] = body["coolDown"]?.GetValue<int>() ?? 0,
@@ -549,10 +536,7 @@ public sealed class DiarkisUdpService(
             var ruleJson = rule.ToJsonString();
             logger.LogInformation("Practice push id=32126 data={Data}", ruleJson);
             await SendDatAsync(udp, session, CmdPracticeRoom, version, 0x01, request.Reply(32126, ruleJson), ct);
-
-            var canOpenJson = new JsonObject { ["roomId"] = roomId }.ToJsonString();
-            logger.LogInformation("Practice push id=32120 data={Data}", canOpenJson);
-            await SendDatAsync(udp, session, CmdPracticeRoom, version, 0x01, request.Reply(32120, canOpenJson), ct);
+            await SendPracticeCanOpenAsync(udp, session, version, request, ct);
         }
 
         // Practice against the bot has no other players to wait for: once the room is opened (32017),
@@ -584,6 +568,46 @@ public sealed class DiarkisUdpService(
                 await SendDatAsync(udp, session, CmdPracticeRoom, version, 0x01, request.Reply(32105, matchedJson), ct);
             }, ct);
         }
+    }
+
+    private async Task SendPracticeMembersAsync(
+        UdpClient udp, Session session, byte version, GameMessage request, CancellationToken ct)
+    {
+        var create = session.PracticeCreate ?? [];
+        var desire = session.PracticeDesire ?? [];
+        var member = new JsonObject
+        {
+            ["userId"] = request.UserId,
+            ["userData"] = new JsonObject
+            {
+                ["userName"] = create["userName"]?.GetValue<string>() ?? "Player",
+                ["userRank"] = create["userRank"]?.GetValue<int>() ?? 1,
+                ["userRivalRank"] = create["userRivalRank"]?.GetValue<int>() ?? 1,
+                ["desiredRole"] = desire["desiredRole"]?.GetValue<int>() ?? 1,
+                ["desiredStageId"] = desire["desiredStageId"]?.GetValue<string>() ?? "unselected",
+                ["platform"] = 3,
+            },
+            ["sdpData"] = session.PracticeSdp ?? create["sdpData"]?.GetValue<string>() ?? string.Empty,
+        };
+        var members = new JsonObject
+        {
+            ["roomId"] = session.PracticeRoomId ?? string.Empty,
+            ["roomOwnerUserId"] = request.UserId,
+            ["roomMemberList"] = new JsonArray(member),
+            ["total"] = 1,
+            ["serial"] = ++session.PracticeSerial,
+        };
+        var json = members.ToJsonString();
+        logger.LogInformation("Practice push id=32101 data={Data}", json);
+        await SendDatAsync(udp, session, CmdPracticeRoom, version, 0x01, request.Reply(32101, json), ct);
+    }
+
+    private async Task SendPracticeCanOpenAsync(
+        UdpClient udp, Session session, byte version, GameMessage request, CancellationToken ct)
+    {
+        var json = new JsonObject { ["roomId"] = session.PracticeRoomId ?? string.Empty }.ToJsonString();
+        logger.LogInformation("Practice push id=32120 data={Data}", json);
+        await SendDatAsync(udp, session, CmdPracticeRoom, version, 0x01, request.Reply(32120, json), ct);
     }
 
     // --- clear-text 0x0C0C directory ---
