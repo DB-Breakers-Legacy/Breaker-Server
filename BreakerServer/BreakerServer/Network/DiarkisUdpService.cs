@@ -553,8 +553,6 @@ public sealed class DiarkisUdpService(
         {
             session.PracticeDesire = body;
             await SendPracticeMembersAsync(udp, session, version, request, ct);
-            if (b == CmdCasualRoom)
-                StartCasualAutofill(udp, session, version, request, ct);
         }
 
         // 32005 member data set: the client sends its current sdpData (e.g. "able_rematch":true, which the
@@ -608,6 +606,15 @@ public sealed class DiarkisUdpService(
             var openJson = new JsonObject { ["roomId"] = session.PracticeRoomId ?? string.Empty }.ToJsonString();
             logger.LogInformation("Practice push id=32118 data={Data}", openJson);
             await SendDatAsync(udp, session, b, version, 0x01, request.Reply(b + 118, openJson), ct);
+
+            // Normal matchmaking: 12017 is "begin matchmaking". The match is only found by the autofill
+            // timer (30 s from here), never at once (2026-11-11: an immediate 12105 plus the later one left the
+            // client loading forever).
+            if (b == CmdCasualRoom)
+            {
+                StartCasualAutofill(udp, session, version, request, ct);
+                return;
+            }
 
             var desire = session.PracticeDesire ?? [];
             var role = desire["desiredRole"]?.GetValue<int>() ?? 1;
@@ -737,7 +744,7 @@ public sealed class DiarkisUdpService(
                 ["serial"] = page + 1,
             };
             var json = members.ToJsonString();
-            logger.LogInformation("Practice push id=32101 page {Page}/{Total} data={Data}", page + 1, pages.Count, json);
+            logger.LogInformation("Room push id={Id} page {Page}/{Total} data={Data}", session.RoomBase + 101, page + 1, pages.Count, json);
             await SendDatAsync(udp, session, session.RoomBase, version, 0x01, request.Reply(session.RoomBase + 101, json), ct);
         }
     }
@@ -831,6 +838,19 @@ public sealed class DiarkisUdpService(
             await Task.Delay(TimeSpan.FromSeconds(1.5), ct);
             logger.LogInformation("Casual push id={Id} data={Data}", CmdCasualRoom + 105, matchedJson);
             await SendDatAsync(udp, session, CmdCasualRoom, version, 0x01, request.Reply(CmdCasualRoom + 105, matchedJson), ct);
+
+            // 12119 CreateConnectionRoom {connectionRoomId, serverIp, serverPort}: in normal matchmaking the
+            // client stores it (Matching slot 73, 0x140819F40 -> +0xD0/+0xF0/+0x110, flag +0x118) and the
+            // non-host branch of Matching state 3 needs it. The practice host never needed 32119.
+            var connection = new JsonObject
+            {
+                ["connectionRoomId"] = session.PracticeRoomId ?? "casual",
+                ["serverIp"] = _options.UdpHost,
+                ["serverPort"] = _options.UdpSessionPort,
+            }.ToJsonString();
+            await Task.Delay(TimeSpan.FromSeconds(1), ct);
+            logger.LogInformation("Casual push id={Id} data={Data}", CmdCasualRoom + 119, connection);
+            await SendDatAsync(udp, session, CmdCasualRoom, version, 0x01, request.Reply(CmdCasualRoom + 119, connection), ct);
         }, ct);
     }
 
@@ -838,7 +858,7 @@ public sealed class DiarkisUdpService(
         UdpClient udp, Session session, byte version, GameMessage request, CancellationToken ct)
     {
         var json = new JsonObject { ["roomId"] = session.PracticeRoomId ?? string.Empty }.ToJsonString();
-        logger.LogInformation("Practice push id=32120 data={Data}", json);
+        logger.LogInformation("Room push id={Id} data={Data}", session.RoomBase + 120, json);
         await SendDatAsync(udp, session, session.RoomBase, version, 0x01, request.Reply(session.RoomBase + 120, json), ct);
     }
 
