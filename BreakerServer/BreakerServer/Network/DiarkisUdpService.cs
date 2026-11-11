@@ -612,6 +612,10 @@ public sealed class DiarkisUdpService(
             // client loading forever).
             if (b == CmdCasualRoom)
             {
+                // The battle room (the search) is joined at once with only the party in it, so the client
+                // shows the search instead of "communicating with server" while the autofill timer runs
+                // (2026-11-11, project lead: matchmaking should search for players until the 30 s pass).
+                await SendPracticeMembersAsync(udp, session, version, request, ct, $"{session.PracticeRoomId ?? "casual"}-battle");
                 StartCasualAutofill(udp, session, version, request, ct);
                 return;
             }
