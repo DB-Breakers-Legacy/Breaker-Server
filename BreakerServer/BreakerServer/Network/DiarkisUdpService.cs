@@ -66,7 +66,6 @@ public sealed class DiarkisUdpService(
         public string? PracticeRoomId;
         public JsonObject? PracticeCreate;   // the player's 32000 request body (name, ranks, sdpData, ...)
         public JsonObject? PracticeDesire;   // the player's 32012 request body (desiredRole, desiredStageId)
-        public int PracticeSerial;
         public string? PracticeSdp;          // latest sdpData from 32005 (member data set)
         public string? ClientPublicAddress;
         public string? ClientLanAddress;
@@ -594,8 +593,12 @@ public sealed class DiarkisUdpService(
             ["roomId"] = session.PracticeRoomId ?? string.Empty,
             ["roomOwnerUserId"] = request.UserId,
             ["roomMemberList"] = new JsonArray(member),
+            // The list arrives in pages: total = number of pages, serial = this page (1-based). The client
+            // (sub_140806A90) keeps a slot per page and applies the list once all pages are in; a serial
+            // above total is dropped. Earlier we counted serial up (2, 3, ...) and every list after the
+            // first was ignored (live 2026-11-10). One page: always total 1, serial 1.
             ["total"] = 1,
-            ["serial"] = ++session.PracticeSerial,
+            ["serial"] = 1,
         };
         var json = members.ToJsonString();
         logger.LogInformation("Practice push id=32101 data={Data}", json);
