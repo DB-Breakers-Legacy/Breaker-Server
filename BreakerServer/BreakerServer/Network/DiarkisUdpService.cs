@@ -710,7 +710,7 @@ public sealed class DiarkisUdpService(
     // 0x14080C660) and fails with error 1620 when a member is missing (live 2026-11-11, error 320001620).
     private async Task SendPracticeMembersAsync(
         UdpClient udp, Session session, byte version, GameMessage request, CancellationToken ct,
-        string? battleRoomId = null)
+        string? battleRoomId = null, bool withBots = false)
     {
         var create = session.PracticeCreate ?? [];
         var desire = session.PracticeDesire ?? [];
@@ -729,7 +729,9 @@ public sealed class DiarkisUdpService(
             ["sdpData"] = session.PracticeSdp ?? create["sdpData"]?.GetValue<string>() ?? string.Empty,
         };
         var list = new JsonArray(member);
-        if (session.PracticeTrial && battleRoomId is null)
+        // Bots join the practice room list in a Trial Match, and the battle-room list (the search, never the
+        // party) when the casual autofill fires, so the search screen counts them (8/8).
+        if ((session.PracticeTrial && battleRoomId is null) || withBots)
         {
             var playerRole = desire["desiredRole"]?.GetValue<int>() ?? 1;
             foreach (var bot in TrialBots(playerRole))
@@ -837,7 +839,8 @@ public sealed class DiarkisUdpService(
             if (stageId == "unselected")
                 stageId = "1000";
             var battleRoomId = $"{session.PracticeRoomId ?? "casual"}-battle";
-            await SendPracticeMembersAsync(udp, session, version, request, ct, battleRoomId);
+            await SendPracticeMembersAsync(udp, session, version, request, ct, battleRoomId, withBots: true);
+            await Task.Delay(TimeSpan.FromSeconds(2), ct);   // let the 8/8 show before the match is found
             var matched = new JsonObject
             {
                 ["roleList"] = TrialRoleList(session, request.UserId, role),
