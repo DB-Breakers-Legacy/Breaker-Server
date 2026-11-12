@@ -213,6 +213,14 @@ namespace
                 alignas(16) float target[4] = { pos[0], dy + 0.5f, pos[2], pos[3] };
                 reinterpret_cast<WarpFn>(g_Base + kWarpRva)(unit, target, 0, 1);
             }
+            else if (vtableRva == kLobbyNpcVftableRva)
+            {
+                // Held at the platform height every frame (test 18: they settle ~5 lower, at 27.2, standing inside
+                // the platform). Their motion vectors are cleared as the warp does (+0x9A0..+0x9D0, 3 x 16 bytes),
+                // with no physics calls.
+                pos[1] = dy;
+                std::memset(reinterpret_cast<void*>(unit + 0x9A0), 0, 0x30);
+            }
             else
             {
                 pos[1] = dy;
@@ -278,7 +286,8 @@ namespace
                 // Already lifted and still on top: leave it. Test 15 (2026-11-11): pieces that had already
                 // fallen were lifted by +32.34 from where they were and ended below the platform top, so the
                 // height is now absolute and anything more than 5 below the platform is put back on top.
-                if (it != lifted.end() && it->second == object && u.y > g_LiftY - 5.0f)
+                const bool npc = u.vtableRva == kLobbyNpcVftableRva;
+                if (it != lifted.end() && it->second == object && (npc ? u.y > g_LiftY - 0.05f : u.y > g_LiftY - 5.0f))
                     continue;
                 std::uintptr_t vtableRva = 0;
                 if (LiftUnit(u.handle, g_LiftY, vtableRva))
