@@ -316,6 +316,8 @@ namespace
     constexpr std::uintptr_t kRivalLevelRva = 0xCD9E0;               // sub_1400CD9E0(character +0x2E0 object)
     constexpr float kInteractRange = 6.0f;
     constexpr float kDownedRange = 120.0f;
+    constexpr std::uintptr_t kPressInputRva = 0x27B1B0;               // sub_14027B1B0(input queue, 2) = interact
+    using PressInputFn = std::uint64_t(__fastcall*)(std::uintptr_t, std::uint64_t);
     using CharacterPtrFn = std::uintptr_t(__fastcall*)(std::uintptr_t);
     using RivalLevelFn = std::uint32_t(__fastcall*)(std::uintptr_t);
 
@@ -381,26 +383,44 @@ namespace
             target = Nearest(r, false, kAbsorbRange, distance);
         }
 
+        // Test 2 (2026-11-11): the patrol walk stops within 5 of its destination (sub_1402B52B0(.., 5, 5)) so the
+        // Raider hovered 5-7 away; next to a downed survivor the game offered interaction 0/3, but the practice
+        // Interact action only presses for kind 5 (civilian absorb) and kept repositioning. Now: aim 4.5 past the
+        // target so "arrived" is on top of it, and press interact directly (input queue sub_14027B1B0(char+0x5B8, 2),
+        // what sub_1402B1B20 does for bots) when the matching interaction is in reach: 0/3 at a downed survivor
+        // (finisher), kind 5 at a civilian (absorb).
         const bool patrolling = action != 0 && At<std::uintptr_t>(action) == g_Base + kPracticePatrolVftableRva;
+        const std::uint32_t reachKind = inReach != 0 ? At<std::uint32_t>(raider + 0x1A94) : 0xFFFFFFFF;
+        const std::uint32_t reachSub = inReach != 0 ? At<std::uint32_t>(raider + 0x1A98) : 0xFFFFFFFF;
+        const bool finisher = downed && reachKind == 0 && reachSub == 3;
+        const bool absorb = !downed && reachKind == 5;
         const char* step = "busy";
-        if (patrolling && target != 0)
+        if (target != 0 && distance <= 3.0f && (finisher || absorb))
         {
-            if (distance <= kInteractRange && inReach != 0)
+            const std::uintptr_t input = At<std::uintptr_t>(raider + 0x5B8);
+            if (input != 0)
             {
-                reinterpret_cast<StartInteractFn>(g_Base + kStartInteractRva)(brain, target);
-                step = "interact";
+                reinterpret_cast<PressInputFn>(g_Base + kPressInputRva)(input, 2);
+                step = finisher ? "press-finisher" : "press-absorb";
             }
-            else
+        }
+        else if (patrolling && target != 0)
+        {
+            const float* p = reinterpret_cast<const float*>(target + kCharPosition);
+            float dx = p[0] - r[0], dz = p[2] - r[2];
+            const float flat = std::sqrt(dx * dx + dz * dz);
+            if (flat > 0.01f)
             {
-                const float* p = reinterpret_cast<const float*>(target + kCharPosition);
-                auto* destination = reinterpret_cast<float*>(action + 0x1790);
-                destination[0] = p[0];
-                destination[1] = p[1];
-                destination[2] = p[2];
-                destination[3] = 1.0f;
-                At<std::uint32_t>(action + 0x1704) = 1;   // patrol: move to the destination
-                step = "walk";
+                dx /= flat;
+                dz /= flat;
             }
+            auto* destination = reinterpret_cast<float*>(action + 0x1790);
+            destination[0] = p[0] + dx * 4.5f;
+            destination[1] = p[1];
+            destination[2] = p[2] + dz * 4.5f;
+            destination[3] = 1.0f;
+            At<std::uint32_t>(action + 0x1704) = 1;   // patrol: move to the destination
+            step = "walk";
         }
 
         // Trace once a second: what the Raider bot is doing and what it sees in reach.
