@@ -336,6 +336,55 @@ namespace
     // So: 8 s after the bot's level goes up (evolution animation), hold 0x800000 for 2.5 s, once per evolution.
     bool g_RaiderDestroy = false;
     constexpr std::uint32_t kDestroyAreaBits = 0x800000;
+
+    // Aim (2026-11-12, user: "the beam goes whereever the raider aims at"; test: the level 3 Kamehameha fired the
+    // opposite way; the area should be random each time). Before firing, a random living civilian at least 100 away
+    // is picked (civilians are spread over every area and die with a destroyed area, so destroyed areas and Cell's
+    // own area drop out) and Cell is turned toward it on every bot update while 0x800000 is held.
+    // sub_140212FB0(character, &direction (x, y, z, w), 1) = Possible_SetFacing: yaw from the vector, snaps
+    // (+0x1924 / +0x1928 yaw, +0x1950 direction). raider_bot_aim_flip=1 turns the other way, in case the game's
+    // forward is the opposite of this vector.
+    constexpr std::uintptr_t kSetFacingRva = 0x212FB0;
+    using SetFacingFn = float(__fastcall*)(std::uintptr_t, const float*, std::uint32_t);
+    volatile bool g_AimActive = false;
+    float g_AimPos[3] = {};
+    bool g_AimFlip = false;
+
+    void FaceAim(std::uintptr_t raider)
+    {
+        if (!g_AimActive || raider == 0)
+            return;
+        const float* r = reinterpret_cast<const float*>(raider + kCharPosition);
+        float dx = g_AimPos[0] - r[0], dz = g_AimPos[2] - r[2];
+        const float flat = std::sqrt(dx * dx + dz * dz);
+        if (flat < 0.01f)
+            return;
+        if (g_AimFlip)
+        {
+            dx = -dx;
+            dz = -dz;
+        }
+        alignas(16) float direction[4] = { dx / flat, 0.0f, dz / flat, 0.0f };
+        reinterpret_cast<SetFacingFn>(g_Base + kSetFacingRva)(raider, direction, 1);
+    }
+
+    // Random living civilian at least minDistance from `from` (0 = none). Uses rand() seeded once.
+    std::uintptr_t RandomFarCivilian(const float* from, float minDistance)
+    {
+        std::uintptr_t found[256];
+        int count = 0;
+        for (std::uint32_t h = 1; h < kCharacterTableSize && count < 256; ++h)
+        {
+            const std::uintptr_t unit = CharacterAt(h);
+            if (unit == 0 || At<std::uintptr_t>(unit) != g_Base + kCivilianVftableRva)
+                continue;
+            const float* p = reinterpret_cast<const float*>(unit + kCharPosition);
+            const float dx = p[0] - from[0], dz = p[2] - from[2];
+            if (dx * dx + dz * dz >= minDistance * minDistance)
+                found[count++] = unit;
+        }
+        return count == 0 ? 0 : found[std::rand() % count];
+    }
     volatile LONG64 g_LastHoldPress = 0;
 
     // Presses interact for the held Raider about once a frame (bot updates run on several threads; at most one
@@ -349,6 +398,8 @@ namespace
         const LONG64 last = g_LastHoldPress;
         if (now - last < 10 || InterlockedCompareExchange64(&g_LastHoldPress, now, last) != last)
             return;
+        if (g_HoldBits == kDestroyAreaBits)
+            FaceAim(raider);
         const std::uintptr_t input = At<std::uintptr_t>(raider + 0x5B8);
         if (input != 0)
             reinterpret_cast<PressInputFn>(g_Base + kPressInputRva)(input, g_HoldBits);
@@ -503,9 +554,57 @@ namespace
             Logger::Info("RaiderBot: evolved to level " + std::to_string(levelNow) + " - destroying an area in 8 s");
         }
         const bool destroying = destroyAt != 0 && now >= destroyAt && now < destroyUntil;
+        static float usedAims[3][3] = {};
+        static int usedAimCount = 0;
+        if (destroyRaider == raider && levelNow <= 1)
+            usedAimCount = 0;                       // new match: Larva again
+        if (destroying && !g_AimActive)
+        {
+            // Pick the area: a random living civilian 100+ away, not near an area this bot already destroyed.
+            std::uintptr_t civ = 0;
+            for (int tries = 0; tries < 20 && civ == 0; ++tries)
+            {
+                civ = RandomFarCivilian(r, 100.0f);
+                if (civ == 0)
+                    break;
+                const float* p = reinterpret_cast<const float*>(civ + kCharPosition);
+                for (int i = 0; i < usedAimCount && civ != 0; ++i)
+                {
+                    const float dx = p[0] - usedAims[i][0], dz = p[2] - usedAims[i][2];
+                    if (dx * dx + dz * dz < 120.0f * 120.0f)
+                        civ = 0;
+                }
+            }
+            if (civ != 0)
+            {
+                const float* p = reinterpret_cast<const float*>(civ + kCharPosition);
+                g_AimPos[0] = p[0];
+                g_AimPos[1] = p[1];
+                g_AimPos[2] = p[2];
+                if (usedAimCount < 3)
+                {
+                    usedAims[usedAimCount][0] = p[0];
+                    usedAims[usedAimCount][1] = p[1];
+                    usedAims[usedAimCount][2] = p[2];
+                    ++usedAimCount;
+                }
+                g_AimActive = true;
+                FaceAim(raider);
+                std::ostringstream line;
+                line << "RaiderBot: aiming the area destroy at a civilian at (" << static_cast<int>(p[0]) << ", "
+                     << static_cast<int>(p[1]) << ", " << static_cast<int>(p[2]) << "), "
+                     << static_cast<int>(std::sqrt((p[0] - r[0]) * (p[0] - r[0]) + (p[2] - r[2]) * (p[2] - r[2])))
+                     << " away; Cell at (" << static_cast<int>(r[0]) << ", " << static_cast<int>(r[2]) << ")"
+                     << (g_AimFlip ? " [flipped]" : "");
+                Logger::Info(line.str());
+            }
+            else
+                Logger::Info("RaiderBot: no civilian 100+ away to aim the area destroy at - firing where Cell faces");
+        }
         if (destroyAt != 0 && now >= destroyUntil)
         {
             destroyAt = destroyUntil = 0;
+            g_AimActive = false;
             Logger::Info("RaiderBot: area destroy input (0x800000) held for 2.5 s - done");
         }
 
@@ -1169,8 +1268,11 @@ bool PracticeBots::Init()
         if (GetPrivateProfileIntA("steam", "raider_bot_no_warp", 1, SteamConfig::GetPath().c_str()) != 0)
             PatchNoWarp();
         g_RaiderDestroy = GetPrivateProfileIntA("steam", "raider_bot_destroy", 1, SteamConfig::GetPath().c_str()) != 0;
+        g_AimFlip = GetPrivateProfileIntA("steam", "raider_bot_aim_flip", 0, SteamConfig::GetPath().c_str()) != 0;
+        std::srand(static_cast<unsigned>(GetTickCount64()));
         if (g_RaiderDestroy)
-            Logger::Info("PracticeBots: the Raider bot destroys an area after each evolution (raider_bot_destroy)");
+            Logger::Info(std::string("PracticeBots: the Raider bot destroys a random area after each evolution (raider_bot_destroy") +
+                         (g_AimFlip ? ", aim flipped)" : ")"));
         g_EnergyTest = GetPrivateProfileIntA("steam", "raider_bot_energy_test", 0, SteamConfig::GetPath().c_str()) != 0;
         char rate[32] = {};
         GetPrivateProfileStringA("steam", "raider_bot_energy_rate", "1.6", rate, sizeof(rate), SteamConfig::GetPath().c_str());
