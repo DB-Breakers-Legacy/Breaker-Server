@@ -328,6 +328,14 @@ namespace
 
     // Raider character whose interact button is being held (0 = none); set by RaiderAbsorbTick every 250 ms.
     volatile std::uintptr_t g_HoldRaider = 0;
+    volatile std::uint32_t g_HoldBits = 2;   // input bits held for g_HoldRaider: 0x2 interact, 0x800000 destroy area
+
+    // Area destruction (raider_bot_destroy=1, 2026-11-12). Game rule (user): each evolution gives the Raider one
+    // area destruction, 3 per match. Input trace of the user playing Cell: the only rare input, once after each
+    // evolution (01:16:49 level 2, 01:18:27 level 3, 01:19:23 level 4), was bits 0x800000, pressed for 1-2 s.
+    // So: 8 s after the bot's level goes up (evolution animation), hold 0x800000 for 2.5 s, once per evolution.
+    bool g_RaiderDestroy = false;
+    constexpr std::uint32_t kDestroyAreaBits = 0x800000;
     volatile LONG64 g_LastHoldPress = 0;
 
     // Presses interact for the held Raider about once a frame (bot updates run on several threads; at most one
@@ -343,7 +351,7 @@ namespace
             return;
         const std::uintptr_t input = At<std::uintptr_t>(raider + 0x5B8);
         if (input != 0)
-            reinterpret_cast<PressInputFn>(g_Base + kPressInputRva)(input, 2);
+            reinterpret_cast<PressInputFn>(g_Base + kPressInputRva)(input, g_HoldBits);
     }
 
     // Finished bodies (2026-11-12): after a finisher the survivor keeps the downed flag (0x20000000), so the bot kept
@@ -477,9 +485,36 @@ namespace
         }
         else
             noFinisherUnit = 0;
+        // Area destruction: once per evolution, 8 s after the level went up, hold 0x800000 for 2.5 s.
+        static std::uintptr_t destroyRaider = 0;
+        static std::uint32_t destroyLevel = 0;      // highest level a destruction was already used (or planned) for
+        static LONG64 destroyAt = 0, destroyUntil = 0;
+        if (destroyRaider != raider)
+        {
+            destroyRaider = raider;
+            destroyLevel = levelNow;                // no destruction for the level the bot spawned with
+            destroyAt = destroyUntil = 0;
+        }
+        if (g_RaiderDestroy && levelNow > destroyLevel && levelNow >= 2)
+        {
+            destroyLevel = levelNow;
+            destroyAt = now + 8000;
+            destroyUntil = destroyAt + 2500;
+            Logger::Info("RaiderBot: evolved to level " + std::to_string(levelNow) + " - destroying an area in 8 s");
+        }
+        const bool destroying = destroyAt != 0 && now >= destroyAt && now < destroyUntil;
+        if (destroyAt != 0 && now >= destroyUntil)
+        {
+            destroyAt = destroyUntil = 0;
+            Logger::Info("RaiderBot: area destroy input (0x800000) held for 2.5 s - done");
+        }
+
         const bool hold = target != 0 && distance <= 3.0f && (finisher || absorb || blast);
-        g_HoldRaider = hold ? raider : 0;
-        if (hold)
+        g_HoldBits = destroying ? kDestroyAreaBits : 2u;
+        g_HoldRaider = (hold || destroying) ? raider : 0;
+        if (destroying)
+            step = "destroy-area";
+        else if (hold)
             step = finisher ? "hold-finisher" : absorb ? "hold-absorb" : "hold-blast";
         else if (patrolling && target != 0)
         {
@@ -1108,6 +1143,9 @@ bool PracticeBots::Init()
         g_RaiderAbsorb = GetPrivateProfileIntA("steam", "raider_absorb", 1, SteamConfig::GetPath().c_str()) != 0;
         if (GetPrivateProfileIntA("steam", "raider_bot_larva", 1, SteamConfig::GetPath().c_str()) != 0)
             PatchLarvaStart();
+        g_RaiderDestroy = GetPrivateProfileIntA("steam", "raider_bot_destroy", 1, SteamConfig::GetPath().c_str()) != 0;
+        if (g_RaiderDestroy)
+            Logger::Info("PracticeBots: the Raider bot destroys an area after each evolution (raider_bot_destroy)");
         g_EnergyTest = GetPrivateProfileIntA("steam", "raider_bot_energy_test", 0, SteamConfig::GetPath().c_str()) != 0;
         char rate[32] = {};
         GetPrivateProfileStringA("steam", "raider_bot_energy_rate", "1.6", rate, sizeof(rate), SteamConfig::GetPath().c_str());
