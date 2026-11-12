@@ -601,11 +601,42 @@ namespace
             else
                 Logger::Info("RaiderBot: no civilian 100+ away to aim the area destroy at - firing where Cell faces");
         }
+        // Test 2 (2026-11-12): levels 2 and 3 fired the wrong way, level 4 right. Facing was only set while the
+        // button was held (2.5 s); the beam comes after a charge animation, while the patrol keeps walking and
+        // turning Cell. Now the aim is held for 8 s from the press, the patrol walk is stopped for that time, and
+        // Cell's facing (+0x1924 yaw, +0x1950 direction) is logged every 0.5 s next to the wanted direction.
+        static LONG64 aimUntil = 0, lastAimLog = 0;
         if (destroyAt != 0 && now >= destroyUntil)
         {
             destroyAt = destroyUntil = 0;
+            aimUntil = g_AimActive ? now + 5500 : 0;     // keep aiming 5.5 s more (8 s from the first press)
+            Logger::Info("RaiderBot: area destroy input (0x800000) held for 2.5 s - keeping the aim for 5.5 s");
+        }
+        if (aimUntil != 0 && now >= aimUntil)
+        {
+            aimUntil = 0;
             g_AimActive = false;
-            Logger::Info("RaiderBot: area destroy input (0x800000) held for 2.5 s - done");
+            Logger::Info("RaiderBot: area destroy aim released");
+        }
+        const bool aiming = g_AimActive && (destroying || aimUntil != 0);
+        if (aiming)
+        {
+            FaceAim(raider);
+            if (patrolling)
+                At<std::uint32_t>(action + 0x1704) = 0;   // patrol: stop moving
+            if (now - lastAimLog >= 500)
+            {
+                lastAimLog = now;
+                const float* d = reinterpret_cast<const float*>(raider + 0x1950);
+                const float wx = g_AimPos[0] - r[0], wz = g_AimPos[2] - r[2];
+                const float wl = std::sqrt(wx * wx + wz * wz);
+                std::ostringstream line;
+                line.precision(2);
+                line << std::fixed << "RaiderBot: aim check yaw=" << At<float>(raider + 0x1924)
+                     << " facing=(" << d[0] << ", " << d[2] << ") wanted=(" << (wl > 0 ? wx / wl : 0) << ", "
+                     << (wl > 0 ? wz / wl : 0) << ") action=" << ClassRva(action);
+                Logger::Info(line.str());
+            }
         }
 
         const bool hold = target != 0 && distance <= 3.0f && (finisher || absorb || blast);
@@ -613,6 +644,8 @@ namespace
         g_HoldRaider = (hold || destroying) ? raider : 0;
         if (destroying)
             step = "destroy-area";
+        else if (aiming)
+            step = "destroy-aim";
         else if (hold)
             step = finisher ? "hold-finisher" : absorb ? "hold-absorb" : "hold-blast";
         else if (patrolling && target != 0)
