@@ -295,6 +295,30 @@ namespace
         LiftTick();
     }
 
+    // Lobby collision (lobby_collision=<file>). Test 8 (2026-11-11): warped onto the Cell Games platform, the
+    // player fell through - the lobby has no Highland River collision. The lobby world (sub_14031F9B0) loads ONE
+    // stage file "<folder><name>.map" (m9000_lobby: the island collision); Highland River's collision is per area,
+    // "data/Map/m1000_areaNN_col.map", loaded by a loader the lobby never runs. Both are opened with
+    // sub_140447770(path, 1, 128) as XG::Game::Battle::StageFile. So the lobby's .map is swapped for one area file.
+    constexpr std::uintptr_t kOpenStageFileRva = 0x447770;
+    using OpenStageFileFn = std::uint64_t(__fastcall*)(const char*, std::uint64_t, std::uint64_t);
+    OpenStageFileFn g_OriginalOpenStageFile = nullptr;
+    void* g_OpenStageFileTarget = nullptr;
+    char g_LobbyCollision[200] = {};
+
+    std::uint64_t __fastcall OpenStageFileDetour(const char* path, std::uint64_t a2, std::uint64_t a3)
+    {
+        const std::size_t length = path != nullptr ? strlen(path) : 0;
+        if (g_LobbyCollision[0] != 0 && length > 4 && strcmp(path + length - 4, ".map") == 0 &&
+            strstr(path, "m9000_lobby") != nullptr)
+        {
+            Logger::Info(std::string("LobbyMap: stage file ") + path + " -> " + g_LobbyCollision);
+            Logger::Flush();
+            return g_OriginalOpenStageFile(g_LobbyCollision, a2, a3);
+        }
+        return g_OriginalOpenStageFile(path, a2, a3);
+    }
+
     bool HookOne(std::uintptr_t rva, void* detour, void** original, void** target, const char* name)
     {
         *target = reinterpret_cast<void*>(g_Base + rva);
@@ -327,6 +351,13 @@ bool LobbyMap::Init()
     const bool name = HookOne(kMapNameRva, reinterpret_cast<void*>(&MapNameDetour),
         reinterpret_cast<void**>(&g_OriginalMapName), &g_MapNameTarget, "sub_140848DB0");
     Logger::Info("LobbyMap: the lobby's map files will come from map " + std::to_string(g_TargetMap) + " (lobby_map)");
+    GetPrivateProfileStringA("steam", "lobby_collision", "", g_LobbyCollision, sizeof(g_LobbyCollision), SteamConfig::GetPath().c_str());
+    if (g_LobbyCollision[0] != 0)
+    {
+        HookOne(kOpenStageFileRva, reinterpret_cast<void*>(&OpenStageFileDetour),
+            reinterpret_cast<void**>(&g_OriginalOpenStageFile), &g_OpenStageFileTarget, "sub_140447770 (stage file)");
+        Logger::Info(std::string("LobbyMap: the lobby's collision file will be ") + g_LobbyCollision + " (lobby_collision)");
+    }
     char lift[32] = {};
     GetPrivateProfileStringA("steam", "lobby_lift_y", "", lift, sizeof(lift), SteamConfig::GetPath().c_str());
     g_LiftY = static_cast<float>(atof(lift));
@@ -341,7 +372,7 @@ bool LobbyMap::Init()
 
 void LobbyMap::Shutdown()
 {
-    for (void** target : { &g_MapDirTarget, &g_MapNameTarget, &g_LobbyUpdateTarget })
+    for (void** target : { &g_MapDirTarget, &g_MapNameTarget, &g_LobbyUpdateTarget, &g_OpenStageFileTarget })
     {
         if (*target)
             HookManager::Disable(*target);
