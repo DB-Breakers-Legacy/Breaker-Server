@@ -1086,6 +1086,29 @@ namespace
         g_OriginalSetFormLevel(form, level, kind, id);
     }
 
+    // No teleporting (raider_bot_no_warp, on by default with casual_bots=1; 2026-11-12, user: "cell seems to
+    // randomly teleport from a blue beam" / "please remove the random teleportations"). The practice AI warps:
+    //   SimpleAIActionPracticeWarp vfunc_4 (0x1402C9560): effect 0xD9819B4A at Cell (call 0x1402C95D5), warp to
+    //     action +0x1790 (sub_140213410, call 0x1402C95F2), effect again there (call 0x1402C963B) = the blue beam.
+    //   SimpleAIActionPracticeInteract vfunc_4: warps onto the target's interact position (call 0x1402C90CB);
+    //     our absorb logic walks there instead.
+    // The four calls are replaced with 5-byte NOPs (their results are not used). The spawn placement in the
+    // practice AI update (0x1402C055A) is kept.
+    void PatchNoWarp()
+    {
+        static const std::uint8_t nop5[5] = { 0x0F, 0x1F, 0x44, 0x00, 0x00 };
+        static const std::uint8_t effect1[5] = { 0xE8, 0x06, 0xB5, 0x9B, 0x00 };
+        static const std::uint8_t warp[5] = { 0xE8, 0x19, 0x9E, 0xF4, 0xFF };
+        static const std::uint8_t effect2[5] = { 0xE8, 0xA0, 0xB4, 0x9B, 0x00 };
+        static const std::uint8_t interactWarp[5] = { 0xE8, 0x40, 0xA3, 0xF4, 0xFF };
+        int done = 0;
+        done += PatchBytes(0x2C95D5, effect1, nop5, 5, "warp effect 1 (0x1402C95D5)");
+        done += PatchBytes(0x2C95F2, warp, nop5, 5, "practice warp (0x1402C95F2)");
+        done += PatchBytes(0x2C963B, effect2, nop5, 5, "warp effect 2 (0x1402C963B)");
+        done += PatchBytes(0x2C90CB, interactWarp, nop5, 5, "interact warp (0x1402C90CB)");
+        Logger::Info("PracticeBots: practice AI teleports removed (" + std::to_string(done) + "/4 patches, raider_bot_no_warp)");
+    }
+
     bool Hook(std::uintptr_t rva, void* detour, void** original, void** target, const char* name)
     {
         *target = reinterpret_cast<void*>(g_Base + rva);
@@ -1143,6 +1166,8 @@ bool PracticeBots::Init()
         g_RaiderAbsorb = GetPrivateProfileIntA("steam", "raider_absorb", 1, SteamConfig::GetPath().c_str()) != 0;
         if (GetPrivateProfileIntA("steam", "raider_bot_larva", 1, SteamConfig::GetPath().c_str()) != 0)
             PatchLarvaStart();
+        if (GetPrivateProfileIntA("steam", "raider_bot_no_warp", 1, SteamConfig::GetPath().c_str()) != 0)
+            PatchNoWarp();
         g_RaiderDestroy = GetPrivateProfileIntA("steam", "raider_bot_destroy", 1, SteamConfig::GetPath().c_str()) != 0;
         if (g_RaiderDestroy)
             Logger::Info("PracticeBots: the Raider bot destroys an area after each evolution (raider_bot_destroy)");
