@@ -162,6 +162,114 @@ namespace
         Logger::Flush();
     }
 
+    // Raider recorder (2026-11-11: find where the Raider's evolution energy lives). F8 also starts/stops a recording:
+    // every 500 ms the Raider character (the one BattleRival in the handle table, 0x2930 bytes) and its form object
+    // (character +0x2E0, 0x400 bytes; its +0xE0 is the level read by sub_1400CD9E0) are copied (reads only, no game
+    // calls) and every 4-byte value that changed is logged as "Rec". Values that changed more than 20 times are
+    // muted after that, so rare changes (a gauge filling on an absorb, a level up) stand out.
+    constexpr std::uintptr_t kRivalVtableRva = 0x1177F40;   // XG::Game::BattleRival
+    constexpr std::size_t kRivalSize = 0x2930;
+    constexpr std::size_t kFormSize = 0x400;
+    volatile bool g_Recording = false;
+
+    bool SafeCopy(std::uintptr_t from, void* to, std::size_t size)
+    {
+        __try
+        {
+            std::memcpy(to, reinterpret_cast<const void*>(from), size);
+            return true;
+        }
+        __except (EXCEPTION_EXECUTE_HANDLER)
+        {
+            return false;
+        }
+    }
+
+    std::uintptr_t FindRaider()
+    {
+        for (std::uint32_t h = 1; h < kHandleTableSize; ++h)
+        {
+            UnitInfo u{};
+            if (ReadUnit(h, u) && u.vtableRva == kRivalVtableRva)
+                return u.object;
+        }
+        return 0;
+    }
+
+    struct Watched
+    {
+        const char* name;
+        std::vector<std::uint32_t> previous;
+        std::vector<std::uint16_t> changes;
+    };
+
+    void Compare(Watched& w, const std::vector<std::uint32_t>& now, double seconds, int& lines)
+    {
+        if (w.previous.size() != now.size())
+        {
+            w.previous = now;
+            w.changes.assign(now.size(), 0);
+            return;
+        }
+        for (std::size_t i = 0; i < now.size(); ++i)
+        {
+            if (now[i] == w.previous[i])
+                continue;
+            if (++w.changes[i] <= 20 && lines < 400)
+            {
+                float before, after;
+                std::memcpy(&before, &w.previous[i], 4);
+                std::memcpy(&after, &now[i], 4);
+                char line[200];
+                sprintf_s(line, "Rec t=%.1f %s+0x%04zX: %u -> %u (float %g -> %g)%s", seconds, w.name, i * 4,
+                    w.previous[i], now[i], before, after, w.changes[i] == 20 ? " [muted from now on]" : "");
+                Logger::Info(line);
+                ++lines;
+            }
+            w.previous[i] = now[i];
+        }
+    }
+
+    DWORD WINAPI RecordThread(LPVOID)
+    {
+        Watched rival{ "raider" }, form{ "form" };
+        const std::uint64_t start = GetTickCount64();
+        std::uintptr_t raider = 0;
+        while (g_Recording)
+        {
+            const double seconds = (GetTickCount64() - start) / 1000.0;
+            const std::uintptr_t found = FindRaider();
+            if (found != raider)
+            {
+                raider = found;
+                rival.previous.clear();
+                form.previous.clear();
+                char line[120];
+                sprintf_s(line, "Rec t=%.1f Raider object 0x%llX", seconds, static_cast<unsigned long long>(raider));
+                Logger::Info(line);
+            }
+            int lines = 0;
+            if (raider != 0)
+            {
+                std::vector<std::uint32_t> now(kRivalSize / 4);
+                if (SafeCopy(raider, now.data(), kRivalSize))
+                    Compare(rival, now, seconds, lines);
+                std::uintptr_t formObject = 0;
+                if (SafeCopy(raider + 0x2E0, &formObject, sizeof(formObject)) && formObject != 0)
+                {
+                    std::vector<std::uint32_t> formNow(kFormSize / 4);
+                    if (SafeCopy(formObject, formNow.data(), kFormSize))
+                        Compare(form, formNow, seconds, lines);
+                }
+            }
+            Logger::Flush();
+            Sleep(500);
+        }
+        Logger::Info("Rec: recording stopped");
+        Logger::Flush();
+        return 0;
+    }
+
     DWORD WINAPI DumpKeyThread(LPVOID)
     {
         bool wasDown = false;
@@ -169,7 +277,15 @@ namespace
         {
             const bool down = (GetAsyncKeyState(VK_F8) & 0x8000) != 0;
             if (down && !wasDown)
+            {
                 DumpPositions();
+                g_Recording = !g_Recording;
+                if (g_Recording)
+                {
+                    Logger::Info("Rec: recording the Raider (F8 again to stop)");
+                    CreateThread(nullptr, 0, &RecordThread, nullptr, 0, nullptr);
+                }
+            }
             wasDown = down;
             Sleep(50);
         }
