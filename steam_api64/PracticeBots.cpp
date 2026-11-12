@@ -323,6 +323,7 @@ namespace
     constexpr std::uintptr_t kAddEnergyRva = 0xCCC40;                // sub_1400CCC40(form, amount): add evolution energy
     using AddEnergyFn = void(__fastcall*)(std::uintptr_t, float);
     bool g_EnergyTest = false;
+    float g_EnergyRate = 1.6f;
     int g_EnergyFills = 0;
 
     // Raider character whose interact button is being held (0 = none); set by RaiderAbsorbTick every 250 ms.
@@ -452,6 +453,18 @@ namespace
         // sub_1400CCC40(form, amount). The trace then shows whether energy grows by itself (before any fill) and
         // whether a full bar makes the bot evolve by itself.
         const std::uintptr_t form = At<std::uintptr_t>(raider + 0x2E0);
+        // Test result (2026-11-11 23:37): the bot's energy stayed 0/650 with lock 0 - it gets none of the steady gain
+        // a player Raider gets (recording: ~1.6 per second from 0) - and a full bar evolves it by itself within ~5 s.
+        // The game keeps the energy after an evolution (650 stays, needed becomes 950). So the bot gets the player's
+        // measured steady gain here (raider_bot_energy_rate, per second, 0 = off) through the same add function.
+        static LONG64 lastGain = 0;
+        if (g_EnergyRate > 0.0f && form != 0)
+        {
+            const LONG64 elapsed = lastGain == 0 ? 0 : now - lastGain;
+            if (elapsed > 0 && elapsed <= 1000)
+                reinterpret_cast<AddEnergyFn>(g_Base + kAddEnergyRva)(form, g_EnergyRate * static_cast<float>(elapsed) / 1000.0f);
+        }
+        lastGain = now;
         if (g_EnergyTest && form != 0)
         {
             static float lastEnergy = -1.0f;
@@ -838,6 +851,10 @@ bool PracticeBots::Init()
         PatchPracticePatrolLoad();
         g_RaiderAbsorb = GetPrivateProfileIntA("steam", "raider_absorb", 1, SteamConfig::GetPath().c_str()) != 0;
         g_EnergyTest = GetPrivateProfileIntA("steam", "raider_bot_energy_test", 0, SteamConfig::GetPath().c_str()) != 0;
+        char rate[32] = {};
+        GetPrivateProfileStringA("steam", "raider_bot_energy_rate", "1.6", rate, sizeof(rate), SteamConfig::GetPath().c_str());
+        g_EnergyRate = static_cast<float>(std::atof(rate));
+        Logger::Info("PracticeBots: Raider bot gains " + std::string(rate) + " evolution energy per second (raider_bot_energy_rate)");
         if (g_EnergyTest)
             Logger::Info("PracticeBots: Raider bot energy test on - a stuck evolution bar is filled after 10 s (raider_bot_energy_test)");
         if (g_RaiderAbsorb)
