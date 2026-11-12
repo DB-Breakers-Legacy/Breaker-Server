@@ -53,6 +53,46 @@ namespace
         }
     }
 
+    // Stage area set-up (sub_14027E170, its step 0 creates one entry per area) and the per-area collision
+    // path (sub_14042C380(out, map, area) -> "data/Map/m%u_area%02d_col.map"): switched / logged too, to find
+    // which load brings in the lobby island (2026-11-11: switching only the map package changed the skybox,
+    // the island stayed).
+    constexpr std::uintptr_t kAreaSetupRva = 0x27E170;
+    constexpr std::uintptr_t kAreaCollisionPathRva = 0x42C380;
+    using AreaSetupFn = std::uint32_t(__fastcall*)(std::uintptr_t);
+    using AreaCollisionPathFn = void(__fastcall*)(std::uintptr_t, std::uint32_t, std::uint32_t);
+    AreaSetupFn g_OriginalAreaSetup = nullptr;
+    AreaCollisionPathFn g_OriginalAreaCollisionPath = nullptr;
+    void* g_AreaSetupTarget = nullptr;
+    void* g_AreaCollisionPathTarget = nullptr;
+
+    std::uint32_t ReadStep(std::uintptr_t setup)
+    {
+        __try { return *reinterpret_cast<std::uint32_t*>(setup + 0x50); }
+        __except (EXCEPTION_EXECUTE_HANDLER) { return 0xFFFFFFFF; }
+    }
+
+    std::uint32_t __fastcall AreaSetupDetour(std::uintptr_t setup)
+    {
+        if (ReadStep(setup) == 0)
+        {
+            std::uint32_t before = 0, stageMap = 0;
+            if (SwitchMap(before, stageMap))
+            {
+                Logger::Info("LobbyMap: area set-up map=" + std::to_string(before) +
+                    (before == kLobbyMap ? " -> switched to " + std::to_string(g_TargetMap) : std::string()));
+                Logger::Flush();
+            }
+        }
+        return g_OriginalAreaSetup(setup);
+    }
+
+    void __fastcall AreaCollisionPathDetour(std::uintptr_t out, std::uint32_t map, std::uint32_t area)
+    {
+        Logger::Info("LobbyMap: area collision m" + std::to_string(map) + "_area" + std::to_string(area));
+        g_OriginalAreaCollisionPath(out, map, area);
+    }
+
     std::uint64_t __fastcall LoadStepDetour(std::uintptr_t phase, std::uint64_t step)
     {
         if (step == 2 || step == 3)
@@ -86,13 +126,30 @@ bool LobbyMap::Init()
         g_LoadStepTarget = nullptr;
         return false;
     }
+    g_AreaSetupTarget = reinterpret_cast<void*>(g_Base + kAreaSetupRva);
+    if (!HookManager::Create(g_AreaSetupTarget, reinterpret_cast<void*>(&AreaSetupDetour), reinterpret_cast<void**>(&g_OriginalAreaSetup)) ||
+        !HookManager::Enable(g_AreaSetupTarget))
+    {
+        Logger::Error("LobbyMap: failed to hook sub_14027E170");
+        g_AreaSetupTarget = nullptr;
+    }
+    g_AreaCollisionPathTarget = reinterpret_cast<void*>(g_Base + kAreaCollisionPathRva);
+    if (!HookManager::Create(g_AreaCollisionPathTarget, reinterpret_cast<void*>(&AreaCollisionPathDetour), reinterpret_cast<void**>(&g_OriginalAreaCollisionPath)) ||
+        !HookManager::Enable(g_AreaCollisionPathTarget))
+    {
+        Logger::Error("LobbyMap: failed to hook sub_14042C380");
+        g_AreaCollisionPathTarget = nullptr;
+    }
     Logger::Info("LobbyMap: the lobby will load map " + std::to_string(g_TargetMap) + " (lobby_map)");
     return true;
 }
 
 void LobbyMap::Shutdown()
 {
-    if (g_LoadStepTarget)
-        HookManager::Disable(g_LoadStepTarget);
-    g_LoadStepTarget = nullptr;
+    for (void** target : { &g_LoadStepTarget, &g_AreaSetupTarget, &g_AreaCollisionPathTarget })
+    {
+        if (*target)
+            HookManager::Disable(*target);
+        *target = nullptr;
+    }
 }
