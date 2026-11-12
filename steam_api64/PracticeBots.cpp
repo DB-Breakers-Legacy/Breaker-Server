@@ -839,6 +839,55 @@ namespace
             Logger::Info("PracticeBots: the Raider bot starts as Larva Cell (level 1) and patrols at level 1 (raider_bot_larva)");
     }
 
+    // Level trace (raider_level_trace=1, 2026-11-12): test 1 of raider_bot_larva still showed level 2 from the bot's
+    // first frame, so 0x1408B7599 is not the path that sets it. Logs every call to the two level setters with the
+    // level asked for and the code address that called it (first 80 calls).
+    //   sub_1408B4AB0(character, level, force)  Possible_SetRaiderLevel
+    //   sub_1400CDFB0(form, level, kind, id)    Possible_SetFormLevel (form = character +0x2E0)
+    constexpr std::uintptr_t kSetRaiderLevelRva = 0x8B4AB0;
+    constexpr std::uintptr_t kSetFormLevelRva = 0xCDFB0;
+    using SetRaiderLevelFn = void(__fastcall*)(std::uintptr_t, std::uint64_t, std::uint8_t);
+    using SetFormLevelFn = void(__fastcall*)(std::uintptr_t, std::uint32_t, std::uint8_t, std::uint32_t);
+    SetRaiderLevelFn g_OriginalSetRaiderLevel = nullptr;
+    SetFormLevelFn g_OriginalSetFormLevel = nullptr;
+    void* g_SetRaiderLevelTarget = nullptr;
+    void* g_SetFormLevelTarget = nullptr;
+    volatile LONG g_LevelTraceCount = 0;
+
+    void __fastcall SetRaiderLevelDetour(std::uintptr_t character, std::uint64_t level, std::uint8_t force)
+    {
+        const auto caller = reinterpret_cast<std::uintptr_t>(_ReturnAddress()) - g_Base;
+        if (InterlockedIncrement(&g_LevelTraceCount) <= 80 && character != 0)
+        {
+            const std::uintptr_t form = At<std::uintptr_t>(character + 0x2E0);
+            std::ostringstream line;
+            line << "LevelTrace: SetRaiderLevel(level=" << static_cast<std::uint32_t>(level) << ", force=" << int(force)
+                 << ") from 0x" << std::hex << (0x140000000ull + caller) << std::dec
+                 << " role=" << At<std::uint32_t>(character + 0x204) << " raiderId=" << At<std::uint32_t>(character + 0x20C)
+                 << " slot=" << At<std::uint32_t>(character + kCharSlot)
+                 << " +1224=" << At<std::uint32_t>(character + 0x1224) << " +122C=" << At<std::uint32_t>(character + 0x122C)
+                 << " formLevel=" << (form != 0 ? At<std::uint32_t>(form + 0xE0) : 0);
+            Logger::Info(line.str());
+            Logger::Flush();
+        }
+        g_OriginalSetRaiderLevel(character, level, force);
+    }
+
+    void __fastcall SetFormLevelDetour(std::uintptr_t form, std::uint32_t level, std::uint8_t kind, std::uint32_t id)
+    {
+        const auto caller = reinterpret_cast<std::uintptr_t>(_ReturnAddress()) - g_Base;
+        if (InterlockedIncrement(&g_LevelTraceCount) <= 80 && form != 0)
+        {
+            std::ostringstream line;
+            line << "LevelTrace: SetFormLevel(level=" << level << ", kind=" << int(kind) << ", id=" << static_cast<std::int32_t>(id)
+                 << ") from 0x" << std::hex << (0x140000000ull + caller) << std::dec
+                 << " was=" << At<std::uint32_t>(form + 0xE0) << " start(+0xDC)=" << At<std::uint32_t>(form + 0xDC);
+            Logger::Info(line.str());
+            Logger::Flush();
+        }
+        g_OriginalSetFormLevel(form, level, kind, id);
+    }
+
     bool Hook(std::uintptr_t rva, void* detour, void** original, void** target, const char* name)
     {
         *target = reinterpret_cast<void*>(g_Base + rva);
@@ -903,6 +952,13 @@ bool PracticeBots::Init()
         Logger::Info("PracticeBots: Raider bot gains " + std::string(rate) + " evolution energy per second (raider_bot_energy_rate)");
         if (g_EnergyTest)
             Logger::Info("PracticeBots: Raider bot energy test on - a stuck evolution bar is filled after 10 s (raider_bot_energy_test)");
+        if (GetPrivateProfileIntA("steam", "raider_level_trace", 0, SteamConfig::GetPath().c_str()) != 0)
+        {
+            Hook(kSetRaiderLevelRva, reinterpret_cast<void*>(&SetRaiderLevelDetour),
+                reinterpret_cast<void**>(&g_OriginalSetRaiderLevel), &g_SetRaiderLevelTarget, "sub_1408B4AB0 (level trace)");
+            Hook(kSetFormLevelRva, reinterpret_cast<void*>(&SetFormLevelDetour),
+                reinterpret_cast<void**>(&g_OriginalSetFormLevel), &g_SetFormLevelTarget, "sub_1400CDFB0 (level trace)");
+        }
         if (g_RaiderAbsorb)
             Logger::Info("PracticeBots: the normal-match Raider bot absorbs civilians when it is only patrolling (raider_absorb)");
         Hook(kFindRaiderEntryRva, reinterpret_cast<void*>(&FindRaiderEntryDetour),
@@ -947,6 +1003,12 @@ void PracticeBots::Shutdown()
         HookManager::Disable(g_IsMatchHostTarget);
     if (g_FindRaiderEntryTarget)
         HookManager::Disable(g_FindRaiderEntryTarget);
+    if (g_SetRaiderLevelTarget)
+        HookManager::Disable(g_SetRaiderLevelTarget);
+    if (g_SetFormLevelTarget)
+        HookManager::Disable(g_SetFormLevelTarget);
+    g_SetRaiderLevelTarget = nullptr;
+    g_SetFormLevelTarget = nullptr;
     g_IsMatchHostTarget = nullptr;
     g_FindRaiderEntryTarget = nullptr;
     g_LobbyStartTarget = nullptr;
