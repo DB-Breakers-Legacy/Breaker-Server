@@ -457,6 +457,12 @@ namespace
                                                    std::to_string(At<std::uint32_t>(raider + 0x1A98)) : std::string("none"))
                  << " target=" << (target == 0 ? "none" : downed ? "downed survivor" : "civilian")
                  << " dist=" << static_cast<int>(distance);
+            // Evolution energy (2026-11-11): the HUD Raider gauge (sub_1408DA9C0) reads it from this same form
+            // object: +0xA0 = current energy (float), +0xA8 = energy needed for the next level (float). Energy is
+            // added only by sub_1400CCC40(form, amount), which does nothing while the byte +0x14 is set.
+            if (rivalState != 0)
+                line << " energy=" << At<float>(rivalState + 0xA0) << "/" << At<float>(rivalState + 0xA8)
+                     << " lock=" << static_cast<int>(At<std::uint8_t>(rivalState + 0x14));
             Logger::Info(line.str());
             Logger::Flush();
         }
