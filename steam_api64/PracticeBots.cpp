@@ -303,15 +303,60 @@ namespace
     constexpr float kAbsorbRange = 80.0f;
     using StartInteractFn = std::uint64_t(__fastcall*)(std::uintptr_t, std::uintptr_t);
     bool g_RaiderAbsorb = false;
-    std::uint64_t g_LastAbsorbCheck = 0;
+    volatile LONG64 g_LastAbsorbCheck = 0;
     int g_AbsorbLogged = 0;
+
+    // Test 1 (2026-11-11): starting Interact from far away did nothing - the Interact update first asks
+    // sub_140121600(raider) (the character's interaction slot +0x1A90: kind +0x1A94, sub-kind +0x1A98, target
+    // handle +0x1AC4) whether something is in reach and drops back to patrol at once when not. The game's own patrol
+    // walks close first (patrol +0x1790 = destination, +0x1704 = 1 "moving", sub_1402B52B0 stops within 5) and only
+    // then starts Interact. Same here: walk the Raider to the target with its patrol action, start Interact once it
+    // is within kInteractRange and the game shows something in reach. Downed survivors come first, then civilians.
+    constexpr std::uintptr_t kInteractionSlotRva = 0x121600;         // sub_140121600(character) -> +0x1A90 or null
+    constexpr std::uintptr_t kRivalLevelRva = 0xCD9E0;               // sub_1400CD9E0(character +0x2E0 object)
+    constexpr float kInteractRange = 6.0f;
+    constexpr float kDownedRange = 120.0f;
+    using CharacterPtrFn = std::uintptr_t(__fastcall*)(std::uintptr_t);
+    using RivalLevelFn = std::uint32_t(__fastcall*)(std::uintptr_t);
+
+    std::uintptr_t Nearest(const float* from, bool downedSurvivors, float range, float& distance)
+    {
+        std::uintptr_t best = 0;
+        float bestDistance = range * range;
+        for (std::uint32_t h = 1; h < kCharacterTableSize; ++h)
+        {
+            const std::uintptr_t unit = CharacterAt(h);
+            if (unit == 0)
+                continue;
+            const std::uintptr_t vtable = At<std::uintptr_t>(unit);
+            if (downedSurvivors)
+            {
+                if (vtable != g_Base + kMobVftableRva || At<std::uint32_t>(unit + kCharRole) != 0 ||
+                    (At<std::uint32_t>(unit + kCharFlags) & 0x20000000) == 0)
+                    continue;
+            }
+            else if (vtable != g_Base + kCivilianVftableRva)
+                continue;
+            const float* p = reinterpret_cast<const float*>(unit + kCharPosition);
+            const float dx = p[0] - from[0], dy = p[1] - from[1], dz = p[2] - from[2];
+            const float d = dx * dx + dy * dy + dz * dz;
+            if (d < bestDistance)
+            {
+                bestDistance = d;
+                best = unit;
+            }
+        }
+        distance = std::sqrt(bestDistance);
+        return best;
+    }
 
     void RaiderAbsorbTick()
     {
-        const std::uint64_t now = GetTickCount64();
-        if (now - g_LastAbsorbCheck < 1000)
+        // Bot updates run on several threads at once: only one of them may take each 250 ms tick.
+        const LONG64 now = static_cast<LONG64>(GetTickCount64());
+        const LONG64 last = g_LastAbsorbCheck;
+        if (now - last < 250 || InterlockedCompareExchange64(&g_LastAbsorbCheck, now, last) != last)
             return;
-        g_LastAbsorbCheck = now;
 
         const std::uintptr_t slots = At<std::uintptr_t>(g_Base + kGameGlobalPtrRva);
         if (slots == 0 || At<std::uint8_t>(slots + kPracticeFlag) != 0 || At<std::uintptr_t>(slots + kCharacterManager) == 0)
@@ -324,33 +369,55 @@ namespace
         if (brain == 0 || At<std::uint32_t>(brain + 0x10) != 1)   // not the practice Raider AI (e.g. a player Raider)
             return;
         const std::uintptr_t action = At<std::uintptr_t>(brain + 0x18);
-        if (action == 0 || At<std::uintptr_t>(action) != g_Base + kPracticePatrolVftableRva)
-            return;   // busy: chasing, interacting, warping
-
+        const std::uintptr_t inReach = reinterpret_cast<CharacterPtrFn>(g_Base + kInteractionSlotRva)(raider);
         const float* r = reinterpret_cast<const float*>(raider + kCharPosition);
-        std::uintptr_t best = 0;
-        float bestDistance = kAbsorbRange * kAbsorbRange;
-        for (std::uint32_t h = 1; h < kCharacterTableSize; ++h)
+
+        float distance = 0.0f;
+        bool downed = true;
+        std::uintptr_t target = Nearest(r, true, kDownedRange, distance);
+        if (target == 0)
         {
-            const std::uintptr_t unit = CharacterAt(h);
-            if (unit == 0 || At<std::uintptr_t>(unit) != g_Base + kCivilianVftableRva)
-                continue;
-            const float* p = reinterpret_cast<const float*>(unit + kCharPosition);
-            const float dx = p[0] - r[0], dy = p[1] - r[1], dz = p[2] - r[2];
-            const float d = dx * dx + dy * dy + dz * dz;
-            if (d < bestDistance)
+            downed = false;
+            target = Nearest(r, false, kAbsorbRange, distance);
+        }
+
+        const bool patrolling = action != 0 && At<std::uintptr_t>(action) == g_Base + kPracticePatrolVftableRva;
+        const char* step = "busy";
+        if (patrolling && target != 0)
+        {
+            if (distance <= kInteractRange && inReach != 0)
             {
-                bestDistance = d;
-                best = unit;
+                reinterpret_cast<StartInteractFn>(g_Base + kStartInteractRva)(brain, target);
+                step = "interact";
+            }
+            else
+            {
+                const float* p = reinterpret_cast<const float*>(target + kCharPosition);
+                auto* destination = reinterpret_cast<float*>(action + 0x1790);
+                destination[0] = p[0];
+                destination[1] = p[1];
+                destination[2] = p[2];
+                destination[3] = 1.0f;
+                At<std::uint32_t>(action + 0x1704) = 1;   // patrol: move to the destination
+                step = "walk";
             }
         }
-        if (best == 0)
-            return;
-        reinterpret_cast<StartInteractFn>(g_Base + kStartInteractRva)(brain, best);
-        if (++g_AbsorbLogged <= 50)
+
+        // Trace once a second: what the Raider bot is doing and what it sees in reach.
+        static std::uint64_t lastTrace = 0;
+        if (static_cast<std::uint64_t>(now) - lastTrace >= 1000 && g_AbsorbLogged < 400)
         {
-            Logger::Info("PracticeBots: Raider bot sent to absorb a civilian " +
-                std::to_string(static_cast<int>(std::sqrt(bestDistance))) + " away");
+            lastTrace = static_cast<std::uint64_t>(now);
+            ++g_AbsorbLogged;
+            const std::uintptr_t rivalState = At<std::uintptr_t>(raider + 0x2E0);
+            const std::uint32_t level = rivalState != 0 ? reinterpret_cast<RivalLevelFn>(g_Base + kRivalLevelRva)(rivalState) : 0;
+            std::ostringstream line;
+            line << "RaiderBot: action=" << ClassRva(action) << " step=" << step << " level=" << level
+                 << " reach=" << (inReach != 0 ? std::to_string(At<std::uint32_t>(raider + 0x1A94)) + "/" +
+                                                   std::to_string(At<std::uint32_t>(raider + 0x1A98)) : std::string("none"))
+                 << " target=" << (target == 0 ? "none" : downed ? "downed survivor" : "civilian")
+                 << " dist=" << static_cast<int>(distance);
+            Logger::Info(line.str());
             Logger::Flush();
         }
     }
