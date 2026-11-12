@@ -30,7 +30,12 @@ namespace
     struct Range { std::uintptr_t begin, end; };
     // Callers (RVA ranges) that get the new map.
     constexpr Range kSwitched[] = {
-        { 0x424810, 0x42C900 },  // per-map point data loaders + map package path sub_14042C280
+        // Test 5 (2026-11-11): with every point-data loader switched (ground smoke, event layouts, ground, instances,
+        // warp points, start positions, event points/units, effects) the lobby still hung before the package step.
+        // Now only the ground, the map object instances and the package path are switched.
+        { 0x4253A0, 0x425650 },  // MapGroundData.mgd (sub_1404253A0)
+        { 0x425650, 0x425D50 },  // instance.objptd (sub_140425650)
+        { 0x42C280, 0x42C380 },  // map package path (sub_14042C280) - test 1/2: changed the sky
         { 0x3B7890, 0x3B7A00 },  // smoke volume path (sub_1403B7890)
     };
     // Callers that keep the lobby's map even inside a switched range.
