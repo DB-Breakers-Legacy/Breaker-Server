@@ -204,12 +204,12 @@ namespace
             auto* pos = reinterpret_cast<float*>(unit + kUnitPosition);
             if (vtableRva == kMobVftableRva)
             {
-                alignas(16) float target[4] = { pos[0], pos[1] + dy, pos[2], pos[3] };
+                alignas(16) float target[4] = { pos[0], dy + 0.5f, pos[2], pos[3] };
                 reinterpret_cast<WarpFn>(g_Base + kWarpRva)(unit, target, 0, 1);
             }
             else
             {
-                pos[1] += dy;
+                pos[1] = dy;
             }
             return true;
         }
@@ -245,8 +245,7 @@ namespace
     {
         auto& lifted = g_Lifted;
         {
-            if (++g_LiftFrame % 15 != 0)
-                return;
+            ++g_LiftFrame;
             if (CurrentMap() != kLobbyMap)
             {
                 lifted.clear();
@@ -270,17 +269,24 @@ namespace
                     continue;
                 const auto object = ObjectAt(u.handle);
                 const auto it = lifted.find(u.handle);
-                if (it != lifted.end() && it->second == object)
+                // Already lifted and still on top: leave it. Test 15 (2026-11-11): pieces that had already
+                // fallen were lifted by +32.34 from where they were and ended below the platform top, so the
+                // height is now absolute and anything more than 5 below the platform is put back on top.
+                if (it != lifted.end() && it->second == object && u.y > g_LiftY - 5.0f)
                     continue;
                 std::uintptr_t vtableRva = 0;
                 if (LiftUnit(u.handle, g_LiftY, vtableRva))
                 {
                     lifted[u.handle] = object;
                     ++moved;
-                    char line[160];
-                    sprintf_s(line, "LobbyLift: raised handle %u (vtable 0x%llX) from %.2f to %.2f", u.handle,
-                        static_cast<unsigned long long>(0x140000000ull + vtableRva), u.y, u.y + g_LiftY);
-                    Logger::Info(line);
+                    static int logged = 0;
+                    if (++logged <= 300)
+                    {
+                        char line[160];
+                        sprintf_s(line, "LobbyLift: put handle %u (vtable 0x%llX) from height %.2f to %.2f", u.handle,
+                            static_cast<unsigned long long>(0x140000000ull + vtableRva), u.y, g_LiftY);
+                        Logger::Info(line);
+                    }
                 }
             }
             if (moved > 0)
