@@ -386,7 +386,7 @@ namespace
                     (At<std::uint32_t>(unit + kCharFlags) & 0x20000000) == 0 || IsSkipped(unit, now))
                     continue;
             }
-            else if (vtable != g_Base + kCivilianVftableRva)
+            else if (vtable != g_Base + kCivilianVftableRva || IsSkipped(unit, now))
                 continue;
             const float* p = reinterpret_cast<const float*>(unit + kCharPosition);
             const float dx = p[0] - from[0], dy = p[1] - from[1], dz = p[2] - from[2];
@@ -451,7 +451,9 @@ namespace
         const char* step = "busy";
         static std::uintptr_t noFinisherUnit = 0;
         static LONG64 noFinisherSince = 0;
-        if (downed && target != 0 && distance <= 3.0f && !finisher)
+        // Same for civilians (user 2026-11-12: "cell also attempted to chase after a civilian that has already been
+        // absorbed"): any target the Raider stands on with no finisher / absorb offered for 2 s is skipped.
+        if (target != 0 && distance <= 3.0f && !finisher && !absorb)
         {
             if (noFinisherUnit != target)
             {
@@ -462,7 +464,8 @@ namespace
             {
                 Skip(target, now);
                 noFinisherUnit = 0;
-                Logger::Info("RaiderBot: downed survivor here offers no finisher for 2 s (already finished) - skipped for 60 s");
+                Logger::Info(std::string("RaiderBot: ") + (downed ? "downed survivor" : "civilian") +
+                             " here offers no finisher/absorb for 2 s (already done) - skipped for 60 s");
                 target = 0;
             }
         }
