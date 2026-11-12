@@ -346,8 +346,32 @@ namespace
             reinterpret_cast<PressInputFn>(g_Base + kPressInputRva)(input, 2);
     }
 
+    // Finished bodies (2026-11-12): after a finisher the survivor keeps the downed flag (0x20000000), so the bot kept
+    // picking the same body and stood on it. A downed survivor the Raider stands on (within 3) without the game
+    // offering a finisher for 2 s is done: it is skipped for 60 s.
+    struct SkippedUnit { std::uintptr_t unit; LONG64 until; };
+    SkippedUnit g_Skipped[16] = {};
+
+    bool IsSkipped(std::uintptr_t unit, LONG64 now)
+    {
+        for (const auto& s : g_Skipped)
+            if (s.unit == unit && now < s.until)
+                return true;
+        return false;
+    }
+
+    void Skip(std::uintptr_t unit, LONG64 now)
+    {
+        SkippedUnit* slot = &g_Skipped[0];
+        for (auto& s : g_Skipped)
+            if (s.unit == unit || now >= s.until) { slot = &s; break; }
+        slot->unit = unit;
+        slot->until = now + 60000;
+    }
+
     std::uintptr_t Nearest(const float* from, bool downedSurvivors, float range, float& distance)
     {
+        const LONG64 now = static_cast<LONG64>(GetTickCount64());
         std::uintptr_t best = 0;
         float bestDistance = range * range;
         for (std::uint32_t h = 1; h < kCharacterTableSize; ++h)
@@ -359,7 +383,7 @@ namespace
             if (downedSurvivors)
             {
                 if (vtable != g_Base + kMobVftableRva || At<std::uint32_t>(unit + kCharRole) != 0 ||
-                    (At<std::uint32_t>(unit + kCharFlags) & 0x20000000) == 0)
+                    (At<std::uint32_t>(unit + kCharFlags) & 0x20000000) == 0 || IsSkipped(unit, now))
                     continue;
             }
             else if (vtable != g_Base + kCivilianVftableRva)
@@ -425,6 +449,25 @@ namespace
         const bool finisher = downed && ((reachKind == 1 && reachSub == 16) || (reachKind == 0 && reachSub == 3));
         const bool absorb = !downed && reachKind == 5;
         const char* step = "busy";
+        static std::uintptr_t noFinisherUnit = 0;
+        static LONG64 noFinisherSince = 0;
+        if (downed && target != 0 && distance <= 3.0f && !finisher)
+        {
+            if (noFinisherUnit != target)
+            {
+                noFinisherUnit = target;
+                noFinisherSince = now;
+            }
+            else if (now - noFinisherSince >= 2000)
+            {
+                Skip(target, now);
+                noFinisherUnit = 0;
+                Logger::Info("RaiderBot: downed survivor here offers no finisher for 2 s (already finished) - skipped for 60 s");
+                target = 0;
+            }
+        }
+        else
+            noFinisherUnit = 0;
         const bool hold = target != 0 && distance <= 3.0f && (finisher || absorb);
         g_HoldRaider = hold ? raider : 0;
         if (hold)
