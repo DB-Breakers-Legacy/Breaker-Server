@@ -319,6 +319,23 @@ namespace
         return g_OriginalOpenStageFile(path, a2, a3);
     }
 
+    // Area collision log: in a match the per-area collision paths are built by sub_14042C380(out, map, area)
+    // ("data/Map/m%u_area%02d_col.map"). Logged to learn which area files a map really has (2026-11-11: lobby
+    // collision areas 00/05 load ground, 01/02 give nothing).
+    constexpr std::uintptr_t kAreaCollisionPathRva = 0x42C380;
+    using AreaCollisionPathFn = void(__fastcall*)(std::uintptr_t, std::uint32_t, std::uint32_t);
+    AreaCollisionPathFn g_OriginalAreaCollisionPath = nullptr;
+    void* g_AreaCollisionPathTarget = nullptr;
+
+    void __fastcall AreaCollisionPathDetour(std::uintptr_t out, std::uint32_t map, std::uint32_t area)
+    {
+        char line[96];
+        sprintf_s(line, "LobbyMap: match loads collision data/Map/m%u_area%02u_col.map", map, area);
+        Logger::Info(line);
+        Logger::Flush();
+        g_OriginalAreaCollisionPath(out, map, area);
+    }
+
     bool HookOne(std::uintptr_t rva, void* detour, void** original, void** target, const char* name)
     {
         *target = reinterpret_cast<void*>(g_Base + rva);
@@ -351,6 +368,8 @@ bool LobbyMap::Init()
     const bool name = HookOne(kMapNameRva, reinterpret_cast<void*>(&MapNameDetour),
         reinterpret_cast<void**>(&g_OriginalMapName), &g_MapNameTarget, "sub_140848DB0");
     Logger::Info("LobbyMap: the lobby's map files will come from map " + std::to_string(g_TargetMap) + " (lobby_map)");
+    HookOne(kAreaCollisionPathRva, reinterpret_cast<void*>(&AreaCollisionPathDetour),
+        reinterpret_cast<void**>(&g_OriginalAreaCollisionPath), &g_AreaCollisionPathTarget, "sub_14042C380 (area collision path)");
     GetPrivateProfileStringA("steam", "lobby_collision", "", g_LobbyCollision, sizeof(g_LobbyCollision), SteamConfig::GetPath().c_str());
     if (g_LobbyCollision[0] != 0)
     {
@@ -372,7 +391,7 @@ bool LobbyMap::Init()
 
 void LobbyMap::Shutdown()
 {
-    for (void** target : { &g_MapDirTarget, &g_MapNameTarget, &g_LobbyUpdateTarget, &g_OpenStageFileTarget })
+    for (void** target : { &g_MapDirTarget, &g_MapNameTarget, &g_LobbyUpdateTarget, &g_OpenStageFileTarget, &g_AreaCollisionPathTarget })
     {
         if (*target)
             HookManager::Disable(*target);
