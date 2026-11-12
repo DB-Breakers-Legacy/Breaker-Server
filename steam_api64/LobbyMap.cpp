@@ -93,6 +93,29 @@ namespace
         g_OriginalAreaCollisionPath(out, map, area);
     }
 
+    // The world itself: sub_14031EA20(world, map) is called by the lobby phase (sub_14067C270, when it starts) with
+    // the map number BEFORE the package step, and by three other phases. Test 2 (2026-11-11): neither the area
+    // set-up nor the collision loader ran in the lobby, so the island comes from here.
+    constexpr std::uintptr_t kWorldCtorRva = 0x31EA20;
+    using WorldCtorFn = std::uintptr_t(__fastcall*)(std::uintptr_t, std::uint32_t);
+    WorldCtorFn g_OriginalWorldCtor = nullptr;
+    void* g_WorldCtorTarget = nullptr;
+
+    std::uintptr_t __fastcall WorldCtorDetour(std::uintptr_t world, std::uint32_t map)
+    {
+        const auto asked = map;
+        if (map == kLobbyMap)
+        {
+            map = g_TargetMap;
+            std::uint32_t before = 0, stageMap = 0;
+            SwitchMap(before, stageMap);
+        }
+        Logger::Info("LobbyMap: world for map " + std::to_string(asked) +
+            (asked == kLobbyMap ? " -> built as map " + std::to_string(map) : std::string()));
+        Logger::Flush();
+        return g_OriginalWorldCtor(world, map);
+    }
+
     std::uint64_t __fastcall LoadStepDetour(std::uintptr_t phase, std::uint64_t step)
     {
         if (step == 2 || step == 3)
@@ -140,13 +163,20 @@ bool LobbyMap::Init()
         Logger::Error("LobbyMap: failed to hook sub_14042C380");
         g_AreaCollisionPathTarget = nullptr;
     }
+    g_WorldCtorTarget = reinterpret_cast<void*>(g_Base + kWorldCtorRva);
+    if (!HookManager::Create(g_WorldCtorTarget, reinterpret_cast<void*>(&WorldCtorDetour), reinterpret_cast<void**>(&g_OriginalWorldCtor)) ||
+        !HookManager::Enable(g_WorldCtorTarget))
+    {
+        Logger::Error("LobbyMap: failed to hook sub_14031EA20");
+        g_WorldCtorTarget = nullptr;
+    }
     Logger::Info("LobbyMap: the lobby will load map " + std::to_string(g_TargetMap) + " (lobby_map)");
     return true;
 }
 
 void LobbyMap::Shutdown()
 {
-    for (void** target : { &g_LoadStepTarget, &g_AreaSetupTarget, &g_AreaCollisionPathTarget })
+    for (void** target : { &g_LoadStepTarget, &g_AreaSetupTarget, &g_AreaCollisionPathTarget, &g_WorldCtorTarget })
     {
         if (*target)
             HookManager::Disable(*target);
