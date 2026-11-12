@@ -4,6 +4,7 @@
 #include "Logger.h"
 #include "SteamConfig.h"
 #include <intrin.h>
+#include <random>
 
 // Experimental: add survivor bots to practice matches (2026-11-11).
 //
@@ -344,6 +345,25 @@ namespace
     // sub_140212FB0(character, &direction (x, y, z, w), 1) = Possible_SetFacing: yaw from the vector, snaps
     // (+0x1924 / +0x1928 yaw, +0x1950 direction). raider_bot_aim_flip=1 turns the other way, in case the game's
     // forward is the opposite of this vector.
+    // Random numbers for the bot (2026-11-12): std::rand keeps its state per thread and srand ran only on the
+    // loading thread, so the bot threads always drew the same sequence (areas B then C in two matches). One shared
+    // generator, seeded from the performance counter and the tick count on first use, guarded by a lock.
+    std::uint32_t BotRandom(std::uint32_t below)
+    {
+        static std::mutex lock;
+        static std::mt19937 generator = [] {
+            LARGE_INTEGER counter = {};
+            QueryPerformanceCounter(&counter);
+            std::seed_seq seed{ static_cast<std::uint32_t>(counter.QuadPart), static_cast<std::uint32_t>(counter.QuadPart >> 32),
+                                static_cast<std::uint32_t>(GetTickCount64()), static_cast<std::uint32_t>(GetCurrentProcessId()) };
+            return std::mt19937(seed);
+        }();
+        if (below <= 1)
+            return 0;
+        std::lock_guard<std::mutex> guard(lock);
+        return std::uniform_int_distribution<std::uint32_t>(0, below - 1)(generator);
+    }
+
     constexpr std::uintptr_t kSetFacingRva = 0x212FB0;
     using SetFacingFn = float(__fastcall*)(std::uintptr_t, const float*, std::uint32_t);
     volatile bool g_AimActive = false;
@@ -417,7 +437,7 @@ namespace
             if (dx * dx + dz * dz >= minDistance * minDistance)
                 found[count++] = unit;
         }
-        return count == 0 ? 0 : found[std::rand() % count];
+        return count == 0 ? 0 : found[BotRandom(count)];
     }
     volatile LONG64 g_LastHoldPress = 0;
 
@@ -621,7 +641,7 @@ namespace
                             break;
                         }
             }
-            destroyTarget = candidateCount > 0 ? candidates[std::rand() % candidateCount] : 0xFFFFFFFF;
+            destroyTarget = candidateCount > 0 ? candidates[BotRandom(candidateCount)] : 0xFFFFFFFF;
             Logger::Info("RaiderBot: areas" + seen.str() + " -> destroying " +
                          (destroyTarget != 0xFFFFFFFF ? std::string(1, static_cast<char>('A' + destroyTarget - 1)) +
                                                         " (area " + std::to_string(destroyTarget) + ")"
@@ -1398,7 +1418,7 @@ bool PracticeBots::Init()
         g_RaiderDestroy = GetPrivateProfileIntA("steam", "raider_bot_destroy", 1, SteamConfig::GetPath().c_str()) != 0;
         g_AimFlip = GetPrivateProfileIntA("steam", "raider_bot_aim_flip", 0, SteamConfig::GetPath().c_str()) != 0;
         g_FaceTarget = GetPrivateProfileIntA("steam", "raider_bot_face_target", 0, SteamConfig::GetPath().c_str()) != 0;
-        std::srand(static_cast<unsigned>(GetTickCount64()));
+        // (random numbers: BotRandom, seeded on first use)
         if (g_RaiderDestroy)
             Logger::Info(std::string("PracticeBots: the Raider bot destroys a random area after each evolution (raider_bot_destroy") +
                          (g_AimFlip ? ", aim flipped)" : ")"));
