@@ -349,6 +349,7 @@ namespace
     volatile bool g_AimActive = false;
     float g_AimPos[3] = {};
     bool g_AimFlip = false;
+    bool g_FaceTarget = false;   // raider_bot_face_target=1: also turn Cell toward a far civilian (old test)
 
     void FaceAim(std::uintptr_t raider)
     {
@@ -558,7 +559,47 @@ namespace
         static int usedAimCount = 0;
         if (destroyRaider == raider && levelNow <= 1)
             usedAimCount = 0;                       // new match: Larva again
-        if (destroying && !g_AimActive)
+        // The real target (2026-11-12): the Raider's destroy routine sub_1401A1740 reads the aimed area number at
+        // raider +0x2664; if it is a valid, not yet destroyed area it destroys that one, otherwise it takes the
+        // first undestroyed area from 1 upward (why the bot destroyed A, B, C in order). Areas: manager =
+        // *(*(game +0x6828) +0x18), entries [+0x18, +0x20) of 24 bytes, entry +8 = area number, +0x12 = destroyed
+        // (sub_1402802A0 = Possible_FindArea). The fallback loop tries numbers 1 .. count-1; so does this.
+        static std::uint32_t destroyTarget = 0;
+        if (destroying && destroyTarget == 0)
+        {
+            std::uint32_t candidates[16];
+            int candidateCount = 0;
+            const std::uintptr_t game = At<std::uintptr_t>(g_Base + kGameGlobalPtrRva);
+            const std::uintptr_t holder = game != 0 ? At<std::uintptr_t>(game + 0x6828) : 0;
+            const std::uintptr_t manager = holder != 0 ? At<std::uintptr_t>(holder + 0x18) : 0;
+            std::ostringstream seen;
+            if (manager != 0)
+            {
+                const std::uintptr_t begin = At<std::uintptr_t>(manager + 0x18), end = At<std::uintptr_t>(manager + 0x20);
+                const std::uint32_t count = (end > begin && end - begin < 24 * 64) ? static_cast<std::uint32_t>((end - begin) / 24) : 0;
+                for (std::uint32_t id = 1; id < count && candidateCount < 16; ++id)
+                    for (std::uintptr_t e = begin; e < end; e += 24)
+                        if (At<std::uint32_t>(e + 8) == id)
+                        {
+                            const bool destroyed = At<std::uint8_t>(e + 0x12) != 0;
+                            seen << " " << static_cast<char>('A' + id - 1) << (destroyed ? "(destroyed)" : "");
+                            if (!destroyed)
+                                candidates[candidateCount++] = id;
+                            break;
+                        }
+            }
+            destroyTarget = candidateCount > 0 ? candidates[std::rand() % candidateCount] : 0xFFFFFFFF;
+            Logger::Info("RaiderBot: areas" + seen.str() + " -> destroying " +
+                         (destroyTarget != 0xFFFFFFFF ? std::string(1, static_cast<char>('A' + destroyTarget - 1)) +
+                                                        " (area " + std::to_string(destroyTarget) + ")"
+                                                      : std::string("? (no area list - the game picks)")));
+        }
+        if (destroying && destroyTarget != 0 && destroyTarget != 0xFFFFFFFF)
+            At<std::uint32_t>(raider + 0x2664) = destroyTarget;   // the aimed area, every tick while holding
+        if (!destroying && destroyAt == 0)
+            destroyTarget = 0;
+
+        if (destroying && !g_AimActive && g_FaceTarget)
         {
             // Pick the area: a random living civilian 100+ away, not near an area this bot already destroyed.
             std::uintptr_t civ = 0;
@@ -1302,6 +1343,7 @@ bool PracticeBots::Init()
             PatchNoWarp();
         g_RaiderDestroy = GetPrivateProfileIntA("steam", "raider_bot_destroy", 1, SteamConfig::GetPath().c_str()) != 0;
         g_AimFlip = GetPrivateProfileIntA("steam", "raider_bot_aim_flip", 0, SteamConfig::GetPath().c_str()) != 0;
+        g_FaceTarget = GetPrivateProfileIntA("steam", "raider_bot_face_target", 0, SteamConfig::GetPath().c_str()) != 0;
         std::srand(static_cast<unsigned>(GetTickCount64()));
         if (g_RaiderDestroy)
             Logger::Info(std::string("PracticeBots: the Raider bot destroys a random area after each evolution (raider_bot_destroy") +
