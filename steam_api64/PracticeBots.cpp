@@ -371,10 +371,19 @@ namespace
     bool g_AimFlip = false;
     bool g_FaceTarget = false;   // raider_bot_face_target=1: also turn Cell toward a far civilian (old test)
 
+    // Lock-on (test 4, 2026-11-12: Cell faced the chosen area exactly, yet the level 2 / 3 beam flew toward E and A).
+    // The beam aims at character +0x1F60, which sub_140231640 copies every frame from the lock-on (MobLockOn at
+    // character +0x310: +0xC target handle = character +0x31C, +0x84 mode = character +0x394; modes 0/1 use the
+    // target character's lock point via its vtable +0x3A0, otherwise +0x1F60 is zero). The practice AI locks on to
+    // survivors, so the beam went wherever that survivor was. While aiming, the lock-on target is set to a civilian
+    // standing in the chosen area (g_AimLockHandle), or cleared (handle 0) when there is none.
+    volatile std::uint32_t g_AimLockHandle = 0;
+
     void FaceAim(std::uintptr_t raider)
     {
         if (!g_AimActive || raider == 0)
             return;
+        At<std::uint32_t>(raider + 0x31C) = g_AimLockHandle;
         const float* r = reinterpret_cast<const float*>(raider + kCharPosition);
         float dx = g_AimPos[0] - r[0], dz = g_AimPos[2] - r[2];
         const float flat = std::sqrt(dx * dx + dz * dz);
@@ -656,6 +665,28 @@ namespace
                 g_AimPos[0] = p[0];
                 g_AimPos[1] = p[1];
                 g_AimPos[2] = p[2];
+                // Lock-on target: the living civilian nearest the area unit, within 120 of it.
+                std::uint32_t lockHandle = 0;
+                float lockBest = 120.0f * 120.0f;
+                for (std::uint32_t h = 1; h < kCharacterTableSize; ++h)
+                {
+                    const std::uintptr_t unit = CharacterAt(h);
+                    if (unit == 0 || At<std::uintptr_t>(unit) != g_Base + kCivilianVftableRva || IsSkipped(unit, now))
+                        continue;
+                    const float* c = reinterpret_cast<const float*>(unit + kCharPosition);
+                    const float dx = c[0] - p[0], dz = c[2] - p[2], d = dx * dx + dz * dz;
+                    if (d < lockBest)
+                    {
+                        lockBest = d;
+                        lockHandle = h;
+                    }
+                }
+                g_AimLockHandle = lockHandle;
+                Logger::Info("RaiderBot: lock-on was handle " + std::to_string(At<std::uint32_t>(raider + 0x31C)) +
+                             " (mode " + std::to_string(At<std::uint32_t>(raider + 0x394)) + ") -> " +
+                             (lockHandle != 0 ? "civilian handle " + std::to_string(lockHandle) + ", " +
+                                                std::to_string(static_cast<int>(std::sqrt(lockBest))) + " from the area unit"
+                                              : std::string("cleared (no civilian in that area)")));
                 g_AimActive = true;
                 FaceAim(raider);
                 std::ostringstream line;
@@ -749,7 +780,9 @@ namespace
                 line.precision(2);
                 line << std::fixed << "RaiderBot: aim check yaw=" << At<float>(raider + 0x1924)
                      << " facing=(" << d[0] << ", " << d[2] << ") wanted=(" << (wl > 0 ? wx / wl : 0) << ", "
-                     << (wl > 0 ? wz / wl : 0) << ") action=" << ClassRva(action);
+                     << (wl > 0 ? wz / wl : 0) << ") lock=" << At<std::uint32_t>(raider + 0x31C) << "/mode "
+                     << At<std::uint32_t>(raider + 0x394) << " aimpoint=(" << At<float>(raider + 0x1F60) << ", "
+                     << At<float>(raider + 0x1F68) << ") action=" << ClassRva(action);
                 Logger::Info(line.str());
             }
         }
