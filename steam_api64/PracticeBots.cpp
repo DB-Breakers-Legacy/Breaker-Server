@@ -289,8 +289,76 @@ namespace
         Logger::Flush();
     }
 
+    // Raider bot absorbs civilians (raider_absorb, on by default with casual_bots=1; normal matches only).
+    // The practice Raider AI (SimpleAIPractice, brain at character +0x2480 with type +0x10 == 1) only patrols and
+    // chases. Its Interact action (SimpleAIActionPracticeInteract, started by sub_1402C8060(brain, target)) asks the
+    // target for its interact position, warps there and presses interact, and drops back to patrol when the target
+    // is gone; it switches to fighting when a survivor is in sight (0x1402C8F00). So whenever the Raider bot is
+    // just patrolling, it is sent to the nearest civilian (CivilianUnit) to absorb it. Checked once a second, from
+    // this per-frame bot update (game thread).
+    constexpr std::uintptr_t kCivilianVftableRva = 0x1247B90;         // XG::Game::CivilianUnit
+    constexpr std::uintptr_t kPracticePatrolVftableRva = 0x11A7EB8;   // SimpleAIActionPracticePatrol
+    constexpr std::uintptr_t kStartInteractRva = 0x2C8060;            // sub_1402C8060(brain, target unit)
+    constexpr std::uintptr_t kCharBrain = 0x2480;
+    constexpr float kAbsorbRange = 80.0f;
+    using StartInteractFn = std::uint64_t(__fastcall*)(std::uintptr_t, std::uintptr_t);
+    bool g_RaiderAbsorb = false;
+    std::uint64_t g_LastAbsorbCheck = 0;
+    int g_AbsorbLogged = 0;
+
+    void RaiderAbsorbTick()
+    {
+        const std::uint64_t now = GetTickCount64();
+        if (now - g_LastAbsorbCheck < 1000)
+            return;
+        g_LastAbsorbCheck = now;
+
+        const std::uintptr_t slots = At<std::uintptr_t>(g_Base + kGameGlobalPtrRva);
+        if (slots == 0 || At<std::uint8_t>(slots + kPracticeFlag) != 0 || At<std::uintptr_t>(slots + kCharacterManager) == 0)
+            return;
+        const auto bySlot = reinterpret_cast<CharacterBySlotFn>(g_Base + kCharacterBySlotRva);
+        const std::uintptr_t raider = bySlot(At<std::uintptr_t>(slots + kCharacterManager), 7);
+        if (raider == 0 || At<std::uintptr_t>(raider) != g_Base + kRivalVftableRva)
+            return;
+        const std::uintptr_t brain = At<std::uintptr_t>(raider + kCharBrain);
+        if (brain == 0 || At<std::uint32_t>(brain + 0x10) != 1)   // not the practice Raider AI (e.g. a player Raider)
+            return;
+        const std::uintptr_t action = At<std::uintptr_t>(brain + 0x18);
+        if (action == 0 || At<std::uintptr_t>(action) != g_Base + kPracticePatrolVftableRva)
+            return;   // busy: chasing, interacting, warping
+
+        const float* r = reinterpret_cast<const float*>(raider + kCharPosition);
+        std::uintptr_t best = 0;
+        float bestDistance = kAbsorbRange * kAbsorbRange;
+        for (std::uint32_t h = 1; h < kCharacterTableSize; ++h)
+        {
+            const std::uintptr_t unit = CharacterAt(h);
+            if (unit == 0 || At<std::uintptr_t>(unit) != g_Base + kCivilianVftableRva)
+                continue;
+            const float* p = reinterpret_cast<const float*>(unit + kCharPosition);
+            const float dx = p[0] - r[0], dy = p[1] - r[1], dz = p[2] - r[2];
+            const float d = dx * dx + dy * dy + dz * dz;
+            if (d < bestDistance)
+            {
+                bestDistance = d;
+                best = unit;
+            }
+        }
+        if (best == 0)
+            return;
+        reinterpret_cast<StartInteractFn>(g_Base + kStartInteractRva)(brain, best);
+        if (++g_AbsorbLogged <= 50)
+        {
+            Logger::Info("PracticeBots: Raider bot sent to absorb a civilian " +
+                std::to_string(static_cast<int>(std::sqrt(bestDistance))) + " away");
+            Logger::Flush();
+        }
+    }
+
     std::uint64_t __fastcall AiUpdateDetour(std::uintptr_t ai, float dt)
     {
+        if (g_RaiderAbsorb)
+            RaiderAbsorbTick();
         const std::uintptr_t self = CharacterAt(At<std::uint32_t>(ai + kAiCharacterHandle));
         if (IsCharacter(self))
         {
@@ -620,6 +688,9 @@ bool PracticeBots::Init()
     {
         Logger::Info("PracticeBots: normal matches are filled with bots too (casual_bots=1)");
         PatchPracticePatrolLoad();
+        g_RaiderAbsorb = GetPrivateProfileIntA("steam", "raider_absorb", 1, SteamConfig::GetPath().c_str()) != 0;
+        if (g_RaiderAbsorb)
+            Logger::Info("PracticeBots: the normal-match Raider bot absorbs civilians when it is only patrolling (raider_absorb)");
         Hook(kFindRaiderEntryRva, reinterpret_cast<void*>(&FindRaiderEntryDetour),
             reinterpret_cast<void**>(&g_OriginalFindRaiderEntry), &g_FindRaiderEntryTarget, "sub_140806780 (match host = Raider)");
         if (g_OriginalFindRaiderEntry != nullptr)
