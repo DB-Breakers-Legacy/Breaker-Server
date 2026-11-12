@@ -89,6 +89,71 @@ namespace
         return g_OriginalMapName(table, Pick(map, reinterpret_cast<std::uintptr_t>(_ReturnAddress()), "name"));
     }
 
+    // F8 position dump (steam_config.ini position_dump=1): writes every unit in the game's handle table
+    // (0x1433B9600, 16-byte entries, object* at +0) with its vtable and position (+0x60 x, y, z floats) to the log.
+    // Used to find the lobby's spawn point and spots on other maps (2026-11-11: lobby on the Cell Games platform).
+    constexpr std::uintptr_t kHandleTableRva = 0x33B9600;
+    constexpr std::uint32_t kHandleTableSize = 0x2000;
+    constexpr std::uintptr_t kUnitPosition = 0x60;
+
+    struct UnitInfo { std::uint32_t handle; std::uintptr_t vtableRva; float x, y, z; };
+
+    bool ReadUnit(std::uint32_t handle, UnitInfo& out)
+    {
+        __try
+        {
+            const auto unit = *reinterpret_cast<std::uintptr_t*>(g_Base + kHandleTableRva + static_cast<std::uintptr_t>(handle) * 16);
+            if (unit == 0)
+                return false;
+            const auto vtable = *reinterpret_cast<std::uintptr_t*>(unit);
+            if (vtable < g_Base + 0x1000000 || vtable > g_Base + 0x1800000)
+                return false;
+            const float* pos = reinterpret_cast<const float*>(unit + kUnitPosition);
+            out = { handle, vtable - g_Base, pos[0], pos[1], pos[2] };
+            return true;
+        }
+        __except (EXCEPTION_EXECUTE_HANDLER)
+        {
+            return false;
+        }
+    }
+
+    void DumpPositions()
+    {
+        const auto game = *reinterpret_cast<std::uintptr_t*>(g_Base + 0x177E470);
+        std::uint32_t map = 0;
+        if (game != 0)
+            map = *reinterpret_cast<std::uint32_t*>(game + 0x20);
+        Logger::Info("PositionDump: --- F8 pressed, map number " + std::to_string(map) + " ---");
+        int count = 0;
+        for (std::uint32_t h = 0; h < kHandleTableSize && count < 400; ++h)
+        {
+            UnitInfo u{};
+            if (!ReadUnit(h, u))
+                continue;
+            char line[160];
+            sprintf_s(line, "PositionDump: handle %u vtable 0x%llX pos %.2f %.2f %.2f", u.handle,
+                static_cast<unsigned long long>(0x140000000ull + u.vtableRva), u.x, u.y, u.z);
+            Logger::Info(line);
+            ++count;
+        }
+        Logger::Info("PositionDump: " + std::to_string(count) + " units");
+        Logger::Flush();
+    }
+
+    DWORD WINAPI DumpKeyThread(LPVOID)
+    {
+        bool wasDown = false;
+        for (;;)
+        {
+            const bool down = (GetAsyncKeyState(VK_F8) & 0x8000) != 0;
+            if (down && !wasDown)
+                DumpPositions();
+            wasDown = down;
+            Sleep(50);
+        }
+    }
+
     bool HookOne(std::uintptr_t rva, void* detour, void** original, void** target, const char* name)
     {
         *target = reinterpret_cast<void*>(g_Base + rva);
@@ -104,6 +169,12 @@ namespace
 
 bool LobbyMap::Init()
 {
+    if (GetPrivateProfileIntA("steam", "position_dump", 0, SteamConfig::GetPath().c_str()) != 0)
+    {
+        g_Base = reinterpret_cast<std::uintptr_t>(GetModuleHandleW(nullptr));
+        CreateThread(nullptr, 0, &DumpKeyThread, nullptr, 0, nullptr);
+        Logger::Info("PositionDump: press F8 to log every unit's position (position_dump=1)");
+    }
     g_TargetMap = static_cast<std::uint32_t>(GetPrivateProfileIntA("steam", "lobby_map", 0, SteamConfig::GetPath().c_str()));
     if (g_TargetMap == 0 || g_TargetMap == kLobbyMap)
         return true;
