@@ -369,6 +369,39 @@ namespace
         reinterpret_cast<SetFacingFn>(g_Base + kSetFacingRva)(raider, direction, 1);
     }
 
+    // A unit that belongs to area `areaId`, for its position (2026-11-12). The area-warning code sub_14027EBF0 looks
+    // these up by area number: sub_14074FC40(*(game +0x6850), id) walks the list at +0xCE0 for a unit whose +0x518 is
+    // the area number, sub_14074D960(*(game +0x6860), id) the list at +0xAE0 for +0x6D0. List nodes: next at +0,
+    // unit handle at +0x14 (same 16-byte unit table as characters). Returns the unit or 0.
+    std::uintptr_t AreaUnit(std::uint32_t areaId, int& whichList)
+    {
+        const std::uintptr_t game = At<std::uintptr_t>(g_Base + kGameGlobalPtrRva);
+        if (game == 0)
+            return 0;
+        const struct { std::uintptr_t managerOffset, listOffset, idOffset; } lists[2] = {
+            { 0x6850, 0xCE0, 0x518 }, { 0x6860, 0xAE0, 0x6D0 } };
+        for (int i = 0; i < 2; ++i)
+        {
+            const std::uintptr_t manager = At<std::uintptr_t>(game + lists[i].managerOffset);
+            if (manager == 0)
+                continue;
+            const std::uintptr_t head = At<std::uintptr_t>(manager + lists[i].listOffset);
+            if (head == 0)
+                continue;
+            std::uintptr_t node = At<std::uintptr_t>(head);
+            for (int guard = 0; node != 0 && node != head && guard < 4096; ++guard, node = At<std::uintptr_t>(node))
+            {
+                const std::uintptr_t unit = CharacterAt(At<std::uint32_t>(node + 0x14));
+                if (unit != 0 && At<std::uint32_t>(unit + lists[i].idOffset) == areaId)
+                {
+                    whichList = i;
+                    return unit;
+                }
+            }
+        }
+        return 0;
+    }
+
     // Random living civilian at least minDistance from `from` (0 = none). Uses rand() seeded once.
     std::uintptr_t RandomFarCivilian(const float* from, float minDistance)
     {
@@ -593,6 +626,27 @@ namespace
                          (destroyTarget != 0xFFFFFFFF ? std::string(1, static_cast<char>('A' + destroyTarget - 1)) +
                                                         " (area " + std::to_string(destroyTarget) + ")"
                                                       : std::string("? (no area list - the game picks)")));
+            // Face the chosen area (test 3, 2026-11-12: random areas worked, the beam still went the wrong way at
+            // levels 2 and 3): aim at a unit that belongs to that area, held for 8 s with the patrol stopped.
+            int whichList = -1;
+            const std::uintptr_t areaUnit = destroyTarget != 0xFFFFFFFF ? AreaUnit(destroyTarget, whichList) : 0;
+            if (areaUnit != 0)
+            {
+                const float* p = reinterpret_cast<const float*>(areaUnit + kCharPosition);
+                g_AimPos[0] = p[0];
+                g_AimPos[1] = p[1];
+                g_AimPos[2] = p[2];
+                g_AimActive = true;
+                FaceAim(raider);
+                std::ostringstream line;
+                line << "RaiderBot: facing area " << static_cast<char>('A' + destroyTarget - 1) << " via "
+                     << ClassRva(areaUnit) << " (list " << whichList << ") at (" << static_cast<int>(p[0]) << ", "
+                     << static_cast<int>(p[1]) << ", " << static_cast<int>(p[2]) << "); Cell at ("
+                     << static_cast<int>(r[0]) << ", " << static_cast<int>(r[2]) << ")";
+                Logger::Info(line.str());
+            }
+            else
+                Logger::Info("RaiderBot: no unit found for the chosen area - not turning Cell");
         }
         if (destroying && destroyTarget != 0 && destroyTarget != 0xFFFFFFFF)
             At<std::uint32_t>(raider + 0x2664) = destroyTarget;   // the aimed area, every tick while holding
