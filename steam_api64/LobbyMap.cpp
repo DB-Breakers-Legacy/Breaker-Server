@@ -216,10 +216,9 @@ namespace
             else if (vtableRva == kLobbyNpcVftableRva)
             {
                 // Held at the platform height every frame (test 18: they settle ~5 lower, at 27.2, standing inside
-                // the platform). Their motion vectors are cleared as the warp does (+0x9A0..+0x9D0, 3 x 16 bytes),
-                // with no physics calls.
+                // the platform). Test 19: also zeroing +0x9A0..+0x9D0 (as the warp does) snapped them to height 0
+                // every frame - that block feeds their position - so only the height is set.
                 pos[1] = dy;
-                std::memset(reinterpret_cast<void*>(unit + 0x9A0), 0, 0x30);
             }
             else
             {
