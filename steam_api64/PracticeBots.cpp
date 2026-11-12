@@ -320,6 +320,10 @@ namespace
     using PressInputFn = std::uint64_t(__fastcall*)(std::uintptr_t, std::uint64_t);
     using CharacterPtrFn = std::uintptr_t(__fastcall*)(std::uintptr_t);
     using RivalLevelFn = std::uint32_t(__fastcall*)(std::uintptr_t);
+    constexpr std::uintptr_t kAddEnergyRva = 0xCCC40;                // sub_1400CCC40(form, amount): add evolution energy
+    using AddEnergyFn = void(__fastcall*)(std::uintptr_t, float);
+    bool g_EnergyTest = false;
+    int g_EnergyFills = 0;
 
     // Raider character whose interact button is being held (0 = none); set by RaiderAbsorbTick every 250 ms.
     volatile std::uintptr_t g_HoldRaider = 0;
@@ -441,6 +445,34 @@ namespace
             destination[3] = 1.0f;
             At<std::uint32_t>(action + 0x1704) = 1;   // patrol: move to the destination
             step = "walk";
+        }
+
+        // Energy test (raider_bot_energy_test=1, 2026-11-11): when the bot's evolution energy (form +0xA0) has not
+        // moved for 10 s, fill it once to the amount needed (+0xA8) through the game's own add-energy function
+        // sub_1400CCC40(form, amount). The trace then shows whether energy grows by itself (before any fill) and
+        // whether a full bar makes the bot evolve by itself.
+        const std::uintptr_t form = At<std::uintptr_t>(raider + 0x2E0);
+        if (g_EnergyTest && form != 0)
+        {
+            static float lastEnergy = -1.0f;
+            static LONG64 sameSince = 0;
+            const float energy = At<float>(form + 0xA0);
+            const float needed = At<float>(form + 0xA8);
+            if (energy != lastEnergy)
+            {
+                lastEnergy = energy;
+                sameSince = now;
+            }
+            else if (now - sameSince >= 10000 && needed > energy && g_EnergyFills < 8)
+            {
+                ++g_EnergyFills;
+                sameSince = now;
+                reinterpret_cast<AddEnergyFn>(g_Base + kAddEnergyRva)(form, needed - energy);
+                Logger::Info("RaiderBot: energy stuck at " + std::to_string(energy) + " for 10 s - test fill to " +
+                             std::to_string(At<float>(form + 0xA0)) + "/" + std::to_string(needed) +
+                             " lock=" + std::to_string(At<std::uint8_t>(form + 0x14)));
+                Logger::Flush();
+            }
         }
 
         // Trace once a second: what the Raider bot is doing and what it sees in reach.
@@ -805,6 +837,9 @@ bool PracticeBots::Init()
         Logger::Info("PracticeBots: normal matches are filled with bots too (casual_bots=1)");
         PatchPracticePatrolLoad();
         g_RaiderAbsorb = GetPrivateProfileIntA("steam", "raider_absorb", 1, SteamConfig::GetPath().c_str()) != 0;
+        g_EnergyTest = GetPrivateProfileIntA("steam", "raider_bot_energy_test", 0, SteamConfig::GetPath().c_str()) != 0;
+        if (g_EnergyTest)
+            Logger::Info("PracticeBots: Raider bot energy test on - a stuck evolution bar is filled after 10 s (raider_bot_energy_test)");
         if (g_RaiderAbsorb)
             Logger::Info("PracticeBots: the normal-match Raider bot absorbs civilians when it is only patrolling (raider_absorb)");
         Hook(kFindRaiderEntryRva, reinterpret_cast<void*>(&FindRaiderEntryDetour),
