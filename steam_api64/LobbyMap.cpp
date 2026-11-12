@@ -4,6 +4,8 @@
 #include "Logger.h"
 #include "SteamConfig.h"
 #include <intrin.h>
+#include <map>
+#include <vector>
 
 // Experimental: show another map as the lobby (steam_config.ini lobby_map=<map number>).
 //
@@ -125,19 +127,34 @@ namespace
         if (game != 0)
             map = *reinterpret_cast<std::uint32_t*>(game + 0x20);
         Logger::Info("PositionDump: --- F8 pressed, map number " + std::to_string(map) + " ---");
-        int count = 0;
-        for (std::uint32_t h = 0; h < kHandleTableSize && count < 400; ++h)
+        // Bulk objects (hundreds of the same class) are skipped: test 1 (2026-11-11) filled the first 400 lines with
+        // two classes and never reached the characters.
+        std::vector<UnitInfo> units;
+        std::map<std::uintptr_t, int> perClass;
+        for (std::uint32_t h = 0; h < kHandleTableSize; ++h)
         {
             UnitInfo u{};
-            if (!ReadUnit(h, u))
+            if (ReadUnit(h, u))
+            {
+                units.push_back(u);
+                ++perClass[u.vtableRva];
+            }
+        }
+        int count = 0, skipped = 0;
+        for (const auto& u : units)
+        {
+            if (perClass[u.vtableRva] > 16 || count >= 600)
+            {
+                ++skipped;
                 continue;
+            }
             char line[160];
             sprintf_s(line, "PositionDump: handle %u vtable 0x%llX pos %.2f %.2f %.2f", u.handle,
                 static_cast<unsigned long long>(0x140000000ull + u.vtableRva), u.x, u.y, u.z);
             Logger::Info(line);
             ++count;
         }
-        Logger::Info("PositionDump: " + std::to_string(count) + " units");
+        Logger::Info("PositionDump: " + std::to_string(count) + " units logged, " + std::to_string(skipped) + " bulk skipped");
         Logger::Flush();
     }
 
