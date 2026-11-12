@@ -321,6 +321,26 @@ namespace
     using CharacterPtrFn = std::uintptr_t(__fastcall*)(std::uintptr_t);
     using RivalLevelFn = std::uint32_t(__fastcall*)(std::uintptr_t);
 
+    // Raider character whose interact button is being held (0 = none); set by RaiderAbsorbTick every 250 ms.
+    volatile std::uintptr_t g_HoldRaider = 0;
+    volatile LONG64 g_LastHoldPress = 0;
+
+    // Presses interact for the held Raider about once a frame (bot updates run on several threads; at most one
+    // press per 10 ms). The tick re-checks every 250 ms that the interaction is still in reach.
+    void RaiderHoldInteract()
+    {
+        const std::uintptr_t raider = g_HoldRaider;
+        if (raider == 0)
+            return;
+        const LONG64 now = static_cast<LONG64>(GetTickCount64());
+        const LONG64 last = g_LastHoldPress;
+        if (now - last < 10 || InterlockedCompareExchange64(&g_LastHoldPress, now, last) != last)
+            return;
+        const std::uintptr_t input = At<std::uintptr_t>(raider + 0x5B8);
+        if (input != 0)
+            reinterpret_cast<PressInputFn>(g_Base + kPressInputRva)(input, 2);
+    }
+
     std::uintptr_t Nearest(const float* from, bool downedSurvivors, float range, float& distance)
     {
         std::uintptr_t best = 0;
@@ -359,6 +379,7 @@ namespace
         const LONG64 last = g_LastAbsorbCheck;
         if (now - last < 250 || InterlockedCompareExchange64(&g_LastAbsorbCheck, now, last) != last)
             return;
+        g_HoldRaider = 0;   // re-decided below; never keep holding for a Raider that may be gone
 
         const std::uintptr_t slots = At<std::uintptr_t>(g_Base + kGameGlobalPtrRva);
         if (slots == 0 || At<std::uint8_t>(slots + kPracticeFlag) != 0 || At<std::uintptr_t>(slots + kCharacterManager) == 0)
@@ -392,18 +413,17 @@ namespace
         const bool patrolling = action != 0 && At<std::uintptr_t>(action) == g_Base + kPracticePatrolVftableRva;
         const std::uint32_t reachKind = inReach != 0 ? At<std::uint32_t>(raider + 0x1A94) : 0xFFFFFFFF;
         const std::uint32_t reachSub = inReach != 0 ? At<std::uint32_t>(raider + 0x1A98) : 0xFFFFFFFF;
-        const bool finisher = downed && reachKind == 0 && reachSub == 3;
+        // Test 3 (2026-11-11): at a civilian, 5/17 came into reach and one press started the tail animation, but
+        // the absorb needs interact HELD - the game's Interact action presses it every frame while the interaction
+        // runs (0x1402C8F00 case 2). Next to a downed survivor the game offered 1/16 (0/3 in test 2). So while the
+        // right interaction is in reach, g_HoldInteract makes RaiderHoldInteract() press it on every bot update.
+        const bool finisher = downed && ((reachKind == 1 && reachSub == 16) || (reachKind == 0 && reachSub == 3));
         const bool absorb = !downed && reachKind == 5;
         const char* step = "busy";
-        if (target != 0 && distance <= 3.0f && (finisher || absorb))
-        {
-            const std::uintptr_t input = At<std::uintptr_t>(raider + 0x5B8);
-            if (input != 0)
-            {
-                reinterpret_cast<PressInputFn>(g_Base + kPressInputRva)(input, 2);
-                step = finisher ? "press-finisher" : "press-absorb";
-            }
-        }
+        const bool hold = target != 0 && distance <= 3.0f && (finisher || absorb);
+        g_HoldRaider = hold ? raider : 0;
+        if (hold)
+            step = finisher ? "hold-finisher" : "hold-absorb";
         else if (patrolling && target != 0)
         {
             const float* p = reinterpret_cast<const float*>(target + kCharPosition);
@@ -445,7 +465,10 @@ namespace
     std::uint64_t __fastcall AiUpdateDetour(std::uintptr_t ai, float dt)
     {
         if (g_RaiderAbsorb)
+        {
             RaiderAbsorbTick();
+            RaiderHoldInteract();
+        }
         const std::uintptr_t self = CharacterAt(At<std::uint32_t>(ai + kAiCharacterHandle));
         if (IsCharacter(self))
         {
