@@ -565,8 +565,71 @@ namespace
         }
     }
 
+    // Input trace (input_trace=1, 2026-11-12): what the PLAYER's character presses, to copy the Raider's
+    // area-destroying move for the bot. Every press goes into the character's input ring (character +0x5B8):
+    // sub_14027B1B0(input, bits) writes entry i at input + (i + 1) * 48 (bits = first dword) and the next write
+    // position at input +0xC34 (64 entries). Read from the bot update (about every 15 ms); once a second the
+    // pressed bit values are logged with counts, plus what is in reach (+0x1A94/+0x1A98) when that changes.
+    bool g_InputTrace = false;
+    volatile LONG64 g_LastInputPoll = 0;
+
+    void InputTraceTick()
+    {
+        const LONG64 now = static_cast<LONG64>(GetTickCount64());
+        const LONG64 last = g_LastInputPoll;
+        if (now - last < 15 || InterlockedCompareExchange64(&g_LastInputPoll, now, last) != last)
+            return;
+        const std::uintptr_t player = FindPlayer();
+        if (player == 0)
+            return;
+        const std::uintptr_t input = At<std::uintptr_t>(player + 0x5B8);
+        if (input == 0)
+            return;
+        static std::uintptr_t lastInput = 0;
+        static std::uint32_t readPos = 0;
+        static std::map<std::uint32_t, int> counts;
+        static LONG64 lastLog = 0;
+        static std::string lastReach;
+        const std::uint32_t writePos = At<std::uint32_t>(input + 0xC34) & 0x3F;
+        if (input != lastInput)
+        {
+            lastInput = input;
+            readPos = writePos;
+        }
+        while (readPos != writePos)
+        {
+            const std::uint32_t bits = At<std::uint32_t>(input + (readPos + 1) * 48);
+            ++counts[bits];
+            readPos = (readPos + 1) & 0x3F;
+        }
+        const std::uintptr_t inReach = reinterpret_cast<CharacterPtrFn>(g_Base + kInteractionSlotRva)(player);
+        const std::string reach = inReach != 0 ? std::to_string(At<std::uint32_t>(player + 0x1A94)) + "/" +
+                                                 std::to_string(At<std::uint32_t>(player + 0x1A98)) : std::string("none");
+        if (reach != lastReach)
+        {
+            lastReach = reach;
+            Logger::Info("InputTrace: in reach " + reach);
+        }
+        if (now - lastLog >= 1000 && !counts.empty())
+        {
+            lastLog = now;
+            std::ostringstream line;
+            line << "InputTrace: pressed";
+            for (const auto& [bits, n] : counts)
+                line << " 0x" << std::hex << bits << std::dec << "x" << n;
+            const std::uintptr_t form = At<std::uintptr_t>(player + 0x2E0);
+            if (form != 0)
+                line << " (level " << reinterpret_cast<RivalLevelFn>(g_Base + kRivalLevelRva)(form) << ")";
+            Logger::Info(line.str());
+            Logger::Flush();
+            counts.clear();
+        }
+    }
+
     std::uint64_t __fastcall AiUpdateDetour(std::uintptr_t ai, float dt)
     {
+        if (g_InputTrace)
+            InputTraceTick();
         if (g_RaiderAbsorb)
         {
             RaiderAbsorbTick();
@@ -1071,6 +1134,9 @@ bool PracticeBots::Init()
     }
     g_FreeMode = GetPrivateProfileIntA("steam", "survivor_bot_free_mode", 0, SteamConfig::GetPath().c_str()) != 0;
     g_Trace = GetPrivateProfileIntA("steam", "survivor_bot_trace", 0, SteamConfig::GetPath().c_str()) != 0;
+    g_InputTrace = GetPrivateProfileIntA("steam", "input_trace", 0, SteamConfig::GetPath().c_str()) != 0;
+    if (g_InputTrace)
+        Logger::Info("PracticeBots: input trace on - the player's pressed input bits are logged once a second (input_trace)");
     if (g_Trace)
         Logger::Info("PracticeBots: bot status trace on (every 2 s per bot)");
 
