@@ -98,7 +98,7 @@ namespace
     constexpr std::uint32_t kHandleTableSize = 0x2000;
     constexpr std::uintptr_t kUnitPosition = 0x60;
 
-    struct UnitInfo { std::uint32_t handle; std::uintptr_t vtableRva; float x, y, z; };
+    struct UnitInfo { std::uint32_t handle; std::uintptr_t vtableRva; float x, y, z; std::uintptr_t object; };
 
     bool ReadUnit(std::uint32_t handle, UnitInfo& out)
     {
@@ -111,7 +111,7 @@ namespace
             if (vtable < g_Base + 0x1000000 || vtable > g_Base + 0x1800000)
                 return false;
             const float* pos = reinterpret_cast<const float*>(unit + kUnitPosition);
-            out = { handle, vtable - g_Base, pos[0], pos[1], pos[2] };
+            out = { handle, vtable - g_Base, pos[0], pos[1], pos[2], unit };
             return true;
         }
         __except (EXCEPTION_EXECUTE_HANDLER)
@@ -143,14 +143,18 @@ namespace
         int count = 0, skipped = 0;
         for (const auto& u : units)
         {
-            if (perClass[u.vtableRva] > 16 || count >= 600)
+            // Map objects (MapObjUnit 0x141258C90, bulk) near the map centre are kept: the Cell Games arena is
+            // probably made of them (2026-11-11: no area collision file holds the platform).
+            const bool nearCentreMapObj = u.vtableRva == 0x1258C90 && u.x * u.x + u.z * u.z < 40.0f * 40.0f;
+            if ((perClass[u.vtableRva] > 16 && !nearCentreMapObj) || count >= 600)
             {
                 ++skipped;
                 continue;
             }
             char line[160];
-            sprintf_s(line, "PositionDump: handle %u vtable 0x%llX pos %.2f %.2f %.2f", u.handle,
-                static_cast<unsigned long long>(0x140000000ull + u.vtableRva), u.x, u.y, u.z);
+            sprintf_s(line, "PositionDump: handle %u vtable 0x%llX pos %.2f %.2f %.2f object 0x%llX", u.handle,
+                static_cast<unsigned long long>(0x140000000ull + u.vtableRva), u.x, u.y, u.z,
+                static_cast<unsigned long long>(u.object));
             Logger::Info(line);
             ++count;
         }
