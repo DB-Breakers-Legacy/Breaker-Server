@@ -436,10 +436,10 @@ namespace
                     addRaider(slots, 7, rivalId, option, 0);
                     // sub_1408BF360 gives the Raider AI mode 4: SimpleAIPractice with the practice patrol action
                     // (brain chooser sub_1401FC5E0), which walks the practice Raider patrol points
-                    // (practiceRaiderPatrolPosition.prpp). A normal match does not load them, and the bot went to
-                    // the map origin under area X (live 2026-11-11). Mode 2 is the plain SimpleAI.
-                    At<std::uint32_t>(slots + 7 * kSlotStride + kSlotAiMode) = 2;
-                    Logger::Info("PracticeBots: normal match - Raider bot added in slot 7 (AI on, plain SimpleAI mode 2)");
+                    // (practiceRaiderPatrolPosition.prpp). Without them the bot went under area X; with the plain
+                    // SimpleAI (mode 2) it stood still (live 2026-11-11). Mode 4 is kept, and the patrol points are
+                    // now loaded in normal matches too (PatchPracticePatrolLoad).
+                    Logger::Info("PracticeBots: normal match - Raider bot added in slot 7 (AI on, practice AI mode 4)");
                 }
             }
 
@@ -532,6 +532,40 @@ namespace
         return g_OriginalFindRaiderEntry(holder) == 0 && FindOwnRoleEntry(holder) != 0 ? 1 : 0;
     }
 
+    // Practice Raider patrol points in normal matches. The stage loader (sub_14070D370, at 0x14070D8C3) loads
+    // practiceRaiderPatrolPosition.prpp only when game +0x28 (practice), +0x2A and +0x29 are all set - the same
+    // flags the lobby uses to turn the practice Raider bot's AI on. The three "je" that skip it are replaced
+    // with NOPs, so the patrol points exist and the practice Raider AI (mode 4) has somewhere to go.
+    // Only applied when the bytes are exactly the expected ones.
+    constexpr std::uintptr_t kPatrolGateRva = 0x70D8C3;
+    void PatchPracticePatrolLoad()
+    {
+        static const std::uint8_t expected[18] = {
+            0x80, 0x78, 0x28, 0x00, 0x74, 0x6E,    // cmp byte [rax+28h],0 ; je
+            0x80, 0x78, 0x2A, 0x00, 0x74, 0x68,    // cmp byte [rax+2Ah],0 ; je
+            0x80, 0x78, 0x29, 0x00, 0x74, 0x62 };  // cmp byte [rax+29h],0 ; je
+        auto* code = reinterpret_cast<std::uint8_t*>(g_Base + kPatrolGateRva);
+        if (std::memcmp(code, expected, sizeof(expected)) != 0)
+        {
+            Logger::Error("PracticeBots: patrol-point gate bytes differ from the expected ones - not patched");
+            return;
+        }
+        DWORD old = 0;
+        if (!VirtualProtect(code, sizeof(expected), PAGE_EXECUTE_READWRITE, &old))
+        {
+            Logger::Error("PracticeBots: VirtualProtect failed - patrol-point gate not patched");
+            return;
+        }
+        for (const std::size_t at : { 4u, 10u, 16u })
+        {
+            code[at] = 0x90;
+            code[at + 1] = 0x90;
+        }
+        VirtualProtect(code, sizeof(expected), old, &old);
+        FlushInstructionCache(GetCurrentProcess(), code, sizeof(expected));
+        Logger::Info("PracticeBots: practice Raider patrol points are loaded in every match (gate 0x14070D8C3 patched)");
+    }
+
     bool Hook(std::uintptr_t rva, void* detour, void** original, void** target, const char* name)
     {
         *target = reinterpret_cast<void*>(g_Base + rva);
@@ -585,6 +619,7 @@ bool PracticeBots::Init()
     if (g_CasualBots)
     {
         Logger::Info("PracticeBots: normal matches are filled with bots too (casual_bots=1)");
+        PatchPracticePatrolLoad();
         Hook(kFindRaiderEntryRva, reinterpret_cast<void*>(&FindRaiderEntryDetour),
             reinterpret_cast<void**>(&g_OriginalFindRaiderEntry), &g_FindRaiderEntryTarget, "sub_140806780 (match host = Raider)");
         if (g_OriginalFindRaiderEntry != nullptr)
