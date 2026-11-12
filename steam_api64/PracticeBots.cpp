@@ -448,6 +448,12 @@ namespace
         // right interaction is in reach, g_HoldInteract makes RaiderHoldInteract() press it on every bot update.
         const bool finisher = downed && ((reachKind == 1 && reachSub == 16) || (reachKind == 0 && reachSub == 3));
         const bool absorb = !downed && reachKind == 5;
+        // Level 4 (2026-11-12): next to a downed survivor the game showed nothing in reach (reach=none at distance
+        // 1-3 for 20 s), yet a level 4 Cell executes with a point-blank ki blast instead of the tail. Test: at level
+        // 4 hold interact anyway when standing on a downed survivor; give up on that body after 6 s.
+        const std::uintptr_t formNow = At<std::uintptr_t>(raider + 0x2E0);
+        const std::uint32_t levelNow = formNow != 0 ? reinterpret_cast<RivalLevelFn>(g_Base + kRivalLevelRva)(formNow) : 0;
+        const bool blast = downed && !finisher && levelNow >= 4 && target != 0 && distance <= 3.0f;
         const char* step = "busy";
         static std::uintptr_t noFinisherUnit = 0;
         static LONG64 noFinisherSince = 0;
@@ -460,7 +466,7 @@ namespace
                 noFinisherUnit = target;
                 noFinisherSince = now;
             }
-            else if (now - noFinisherSince >= 2000)
+            else if (now - noFinisherSince >= (blast ? 6000 : 2000))
             {
                 Skip(target, now);
                 noFinisherUnit = 0;
@@ -471,10 +477,10 @@ namespace
         }
         else
             noFinisherUnit = 0;
-        const bool hold = target != 0 && distance <= 3.0f && (finisher || absorb);
+        const bool hold = target != 0 && distance <= 3.0f && (finisher || absorb || blast);
         g_HoldRaider = hold ? raider : 0;
         if (hold)
-            step = finisher ? "hold-finisher" : "hold-absorb";
+            step = finisher ? "hold-finisher" : absorb ? "hold-absorb" : "hold-blast";
         else if (patrolling && target != 0)
         {
             const float* p = reinterpret_cast<const float*>(target + kCharPosition);
