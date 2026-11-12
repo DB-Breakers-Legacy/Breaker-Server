@@ -3,133 +3,95 @@
 #include "HookManager.h"
 #include "Logger.h"
 #include "SteamConfig.h"
+#include <intrin.h>
 
-// The game keeps the current map number at +0x20 of its game global (0x14177E470): 9000 = the lobby
-// (data/Map/m9000_lobby), 1000 Grass Rock, 1200 Kai Resorts, 1300 Canyon Namek, 4000 Inside Buu, 8000 Time Nest.
-// GamePhaseBattleCore's load step sub_14065C6D0(phase, step) builds the map package path from that number
-// (step 2, and step 3 unless the stage info names its own map at +0x18), and the collision loader
-// sub_14027D7D0 reads it again. Switching 9000 to another number right before step 2/3 makes the lobby
-// load that map instead. Experiment (2026-11-11): what the lobby's own objects, NPCs and spawn points do on
-// another map is unknown.
+// Experimental: show another map as the lobby (steam_config.ini lobby_map=<map number>).
+//
+// Map numbers: 9000 = lobby (m9000_lobby), 1000 Grass Rock (Highland River), 1200 Kai Resorts, 1300 Canyon Namek,
+// 4000 Inside Buu, 8000 Time Nest. The game keeps the current number at game global (0x14177E470) +0x20.
+//
+// What we learned (2026-11-11):
+//  - Test 1/2: switching the number only at the map package step (sub_14065C6D0 step 2) changed the lobby SKY.
+//  - Test 3: switching the game's number at the world constructor (sub_14031EA20, run by the lobby phase
+//    sub_14067C270 before the package step) built the world as the new map but the game then never left the
+//    loading screen: other lobby-only data was then looked up for the new map.
+//
+// So now the game's own number stays 9000, and only the map-name lookups used by the map's own files are
+// answered with the new map: sub_140848D70 (folder) and sub_140848DB0 (name) on table 133 (MapListData), when
+// called from the map file loaders (ground, object instances, layouts: 0x140424810..0x14042C900), the map
+// package path (sub_14042C280), the world/sky (sub_14031F360) and the smoke volume (sub_1403B7890). The lobby
+// object layout (lobbyobject.lopt, sub_1404273B0) keeps the lobby's.
 namespace
 {
-    constexpr std::uintptr_t kGameGlobalPtrRva = 0x177E470;
-    constexpr std::uintptr_t kMapNumber = 0x20;
-    constexpr std::uintptr_t kStageInfoHolder = 0x6828;   // game + 0x6828 -> +0x10 = current stage info
-    constexpr std::uintptr_t kBattleCoreLoadRva = 0x65C6D0; // sub_14065C6D0(GamePhaseBattleCore*, step)
     constexpr std::uint32_t kLobbyMap = 9000;
+    constexpr std::uintptr_t kMapDirRva = 0x848D70;   // sub_140848D70(table, map) -> folder
+    constexpr std::uintptr_t kMapNameRva = 0x848DB0;  // sub_140848DB0(table, map) -> name
 
-    using LoadStepFn = std::uint64_t(__fastcall*)(std::uintptr_t, std::uint64_t);
-    LoadStepFn g_OriginalLoadStep = nullptr;
-    void* g_LoadStepTarget = nullptr;
+    struct Range { std::uintptr_t begin, end; };
+    // Callers (RVA ranges) that get the new map.
+    constexpr Range kSwitched[] = {
+        { 0x424810, 0x42C900 },  // per-map point data loaders + map package path sub_14042C280
+        { 0x31F360, 0x31F500 },  // world / sky (sub_14031F360)
+        { 0x3B7890, 0x3B7A00 },  // smoke volume path (sub_1403B7890)
+    };
+    // Callers that keep the lobby's map even inside a switched range.
+    constexpr Range kKept[] = {
+        { 0x4273B0, 0x427690 },  // lobbyobject.lopt (sub_1404273B0)
+    };
+
+    using MapLookupFn = const char*(__fastcall*)(std::uintptr_t, std::uint32_t);
+    MapLookupFn g_OriginalMapDir = nullptr;
+    MapLookupFn g_OriginalMapName = nullptr;
+    void* g_MapDirTarget = nullptr;
+    void* g_MapNameTarget = nullptr;
     std::uintptr_t g_Base = 0;
     std::uint32_t g_TargetMap = 0;
+    volatile long g_Logged = 0;
 
-    // Reads (and, for the lobby, switches) the map number; no C++ objects here so __try is allowed.
-    bool SwitchMap(std::uint32_t& before, std::uint32_t& stageMap)
+    bool In(const Range* ranges, std::size_t count, std::uintptr_t rva)
     {
-        __try
+        for (std::size_t i = 0; i < count; ++i)
+            if (rva >= ranges[i].begin && rva < ranges[i].end)
+                return true;
+        return false;
+    }
+
+    std::uint32_t Pick(std::uint32_t map, std::uintptr_t returnAddress, const char* which)
+    {
+        if (map != kLobbyMap)
+            return map;
+        const auto rva = returnAddress - g_Base;
+        const bool switched = In(kSwitched, std::size(kSwitched), rva) && !In(kKept, std::size(kKept), rva);
+        if (InterlockedIncrement(&g_Logged) <= 200)
         {
-            const auto game = *reinterpret_cast<std::uintptr_t*>(g_Base + kGameGlobalPtrRva);
-            if (game == 0)
-                return false;
-            auto* map = reinterpret_cast<std::uint32_t*>(game + kMapNumber);
-            before = *map;
-            stageMap = 0xFFFFFFFF;
-            const auto holder = *reinterpret_cast<std::uintptr_t*>(game + kStageInfoHolder);
-            if (holder != 0)
-            {
-                const auto info = *reinterpret_cast<std::uintptr_t*>(holder + 0x10);
-                if (info != 0)
-                    stageMap = *reinterpret_cast<std::uint32_t*>(info + 0x18);
-            }
-            if (before == kLobbyMap)
-                *map = g_TargetMap;
-            return true;
+            char line[160];
+            sprintf_s(line, "LobbyMap: %s lookup for 9000 from 0x%llX -> %u", which,
+                static_cast<unsigned long long>(0x140000000ull + rva), switched ? g_TargetMap : kLobbyMap);
+            Logger::Info(line);
         }
-        __except (EXCEPTION_EXECUTE_HANDLER)
+        return switched ? g_TargetMap : map;
+    }
+
+    const char* __fastcall MapDirDetour(std::uintptr_t table, std::uint32_t map)
+    {
+        return g_OriginalMapDir(table, Pick(map, reinterpret_cast<std::uintptr_t>(_ReturnAddress()), "folder"));
+    }
+
+    const char* __fastcall MapNameDetour(std::uintptr_t table, std::uint32_t map)
+    {
+        return g_OriginalMapName(table, Pick(map, reinterpret_cast<std::uintptr_t>(_ReturnAddress()), "name"));
+    }
+
+    bool HookOne(std::uintptr_t rva, void* detour, void** original, void** target, const char* name)
+    {
+        *target = reinterpret_cast<void*>(g_Base + rva);
+        if (!HookManager::Create(*target, detour, original) || !HookManager::Enable(*target))
         {
+            Logger::Error(std::string("LobbyMap: failed to hook ") + name);
+            *target = nullptr;
             return false;
         }
-    }
-
-    // Stage area set-up (sub_14027E170, its step 0 creates one entry per area) and the per-area collision
-    // path (sub_14042C380(out, map, area) -> "data/Map/m%u_area%02d_col.map"): switched / logged too, to find
-    // which load brings in the lobby island (2026-11-11: switching only the map package changed the skybox,
-    // the island stayed).
-    constexpr std::uintptr_t kAreaSetupRva = 0x27E170;
-    constexpr std::uintptr_t kAreaCollisionPathRva = 0x42C380;
-    using AreaSetupFn = std::uint32_t(__fastcall*)(std::uintptr_t);
-    using AreaCollisionPathFn = void(__fastcall*)(std::uintptr_t, std::uint32_t, std::uint32_t);
-    AreaSetupFn g_OriginalAreaSetup = nullptr;
-    AreaCollisionPathFn g_OriginalAreaCollisionPath = nullptr;
-    void* g_AreaSetupTarget = nullptr;
-    void* g_AreaCollisionPathTarget = nullptr;
-
-    std::uint32_t ReadStep(std::uintptr_t setup)
-    {
-        __try { return *reinterpret_cast<std::uint32_t*>(setup + 0x50); }
-        __except (EXCEPTION_EXECUTE_HANDLER) { return 0xFFFFFFFF; }
-    }
-
-    std::uint32_t __fastcall AreaSetupDetour(std::uintptr_t setup)
-    {
-        if (ReadStep(setup) == 0)
-        {
-            std::uint32_t before = 0, stageMap = 0;
-            if (SwitchMap(before, stageMap))
-            {
-                Logger::Info("LobbyMap: area set-up map=" + std::to_string(before) +
-                    (before == kLobbyMap ? " -> switched to " + std::to_string(g_TargetMap) : std::string()));
-                Logger::Flush();
-            }
-        }
-        return g_OriginalAreaSetup(setup);
-    }
-
-    void __fastcall AreaCollisionPathDetour(std::uintptr_t out, std::uint32_t map, std::uint32_t area)
-    {
-        Logger::Info("LobbyMap: area collision m" + std::to_string(map) + "_area" + std::to_string(area));
-        g_OriginalAreaCollisionPath(out, map, area);
-    }
-
-    // The world itself: sub_14031EA20(world, map) is called by the lobby phase (sub_14067C270, when it starts) with
-    // the map number BEFORE the package step, and by three other phases. Test 2 (2026-11-11): neither the area
-    // set-up nor the collision loader ran in the lobby, so the island comes from here.
-    constexpr std::uintptr_t kWorldCtorRva = 0x31EA20;
-    using WorldCtorFn = std::uintptr_t(__fastcall*)(std::uintptr_t, std::uint32_t);
-    WorldCtorFn g_OriginalWorldCtor = nullptr;
-    void* g_WorldCtorTarget = nullptr;
-
-    std::uintptr_t __fastcall WorldCtorDetour(std::uintptr_t world, std::uint32_t map)
-    {
-        const auto asked = map;
-        if (map == kLobbyMap)
-        {
-            map = g_TargetMap;
-            std::uint32_t before = 0, stageMap = 0;
-            SwitchMap(before, stageMap);
-        }
-        Logger::Info("LobbyMap: world for map " + std::to_string(asked) +
-            (asked == kLobbyMap ? " -> built as map " + std::to_string(map) : std::string()));
-        Logger::Flush();
-        return g_OriginalWorldCtor(world, map);
-    }
-
-    std::uint64_t __fastcall LoadStepDetour(std::uintptr_t phase, std::uint64_t step)
-    {
-        if (step == 2 || step == 3)
-        {
-            std::uint32_t before = 0, stageMap = 0;
-            if (SwitchMap(before, stageMap))
-            {
-                Logger::Info("LobbyMap: load step " + std::to_string(step) + " map=" + std::to_string(before) +
-                    " stageInfoMap=" + std::to_string(static_cast<int>(stageMap)) +
-                    (before == kLobbyMap ? " -> switched to " + std::to_string(g_TargetMap) : std::string()));
-                Logger::Flush();
-            }
-        }
-        return g_OriginalLoadStep(phase, step);
+        return true;
     }
 }
 
@@ -141,42 +103,17 @@ bool LobbyMap::Init()
     g_Base = reinterpret_cast<std::uintptr_t>(GetModuleHandleW(nullptr));
     if (g_Base == 0)
         return false;
-    g_LoadStepTarget = reinterpret_cast<void*>(g_Base + kBattleCoreLoadRva);
-    if (!HookManager::Create(g_LoadStepTarget, reinterpret_cast<void*>(&LoadStepDetour), reinterpret_cast<void**>(&g_OriginalLoadStep)) ||
-        !HookManager::Enable(g_LoadStepTarget))
-    {
-        Logger::Error("LobbyMap: failed to hook sub_14065C6D0");
-        g_LoadStepTarget = nullptr;
-        return false;
-    }
-    g_AreaSetupTarget = reinterpret_cast<void*>(g_Base + kAreaSetupRva);
-    if (!HookManager::Create(g_AreaSetupTarget, reinterpret_cast<void*>(&AreaSetupDetour), reinterpret_cast<void**>(&g_OriginalAreaSetup)) ||
-        !HookManager::Enable(g_AreaSetupTarget))
-    {
-        Logger::Error("LobbyMap: failed to hook sub_14027E170");
-        g_AreaSetupTarget = nullptr;
-    }
-    g_AreaCollisionPathTarget = reinterpret_cast<void*>(g_Base + kAreaCollisionPathRva);
-    if (!HookManager::Create(g_AreaCollisionPathTarget, reinterpret_cast<void*>(&AreaCollisionPathDetour), reinterpret_cast<void**>(&g_OriginalAreaCollisionPath)) ||
-        !HookManager::Enable(g_AreaCollisionPathTarget))
-    {
-        Logger::Error("LobbyMap: failed to hook sub_14042C380");
-        g_AreaCollisionPathTarget = nullptr;
-    }
-    g_WorldCtorTarget = reinterpret_cast<void*>(g_Base + kWorldCtorRva);
-    if (!HookManager::Create(g_WorldCtorTarget, reinterpret_cast<void*>(&WorldCtorDetour), reinterpret_cast<void**>(&g_OriginalWorldCtor)) ||
-        !HookManager::Enable(g_WorldCtorTarget))
-    {
-        Logger::Error("LobbyMap: failed to hook sub_14031EA20");
-        g_WorldCtorTarget = nullptr;
-    }
-    Logger::Info("LobbyMap: the lobby will load map " + std::to_string(g_TargetMap) + " (lobby_map)");
-    return true;
+    const bool dir = HookOne(kMapDirRva, reinterpret_cast<void*>(&MapDirDetour),
+        reinterpret_cast<void**>(&g_OriginalMapDir), &g_MapDirTarget, "sub_140848D70");
+    const bool name = HookOne(kMapNameRva, reinterpret_cast<void*>(&MapNameDetour),
+        reinterpret_cast<void**>(&g_OriginalMapName), &g_MapNameTarget, "sub_140848DB0");
+    Logger::Info("LobbyMap: the lobby's map files will come from map " + std::to_string(g_TargetMap) + " (lobby_map)");
+    return dir && name;
 }
 
 void LobbyMap::Shutdown()
 {
-    for (void** target : { &g_LoadStepTarget, &g_AreaSetupTarget, &g_AreaCollisionPathTarget, &g_WorldCtorTarget })
+    for (void** target : { &g_MapDirTarget, &g_MapNameTarget })
     {
         if (*target)
             HookManager::Disable(*target);
