@@ -205,7 +205,10 @@ namespace
             if (vtableRva != kMobVftableRva && (vtableRva < 0x1250000 || vtableRva > 0x1800000))
                 return false;
             auto* pos = reinterpret_cast<float*>(unit + kUnitPosition);
-            if (vtableRva == kMobVftableRva || vtableRva == kLobbyNpcVftableRva)
+            // Test 17 (2026-11-11): warping the lobby NPCs too made everyone - the player as well - fall through the
+            // platform again; the warp writes UnitCharacter internals (+0x938, +0x9E0, +0xA50) that a
+            // LobbyNpcCharacter may lay out differently. Only the player (Mob) is warped.
+            if (vtableRva == kMobVftableRva)
             {
                 alignas(16) float target[4] = { pos[0], dy + 0.5f, pos[2], pos[3] };
                 reinterpret_cast<WarpFn>(g_Base + kWarpRva)(unit, target, 0, 1);
