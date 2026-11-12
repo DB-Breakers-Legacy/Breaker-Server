@@ -401,8 +401,27 @@ public static class ApiEndpoints
         api.MapPost("/battle/practice_result", (ApiResponseService responses) =>
             responses.Respond(new object?[] { 0 }));
 
-        api.MapPost("/battle/result", (ApiResponseService responses) =>
+        // Battle result (ServerApiResponseBattleResult, parser 0x1407DB070, fields 0..10).
+        // Field 8 (parser sub_1407CDA70 -> reply +0x240/+0x248) is a list of [raiderId, rankIndex, value, value]
+        // (16-byte entries). When a normal match ends with the player as the Raider, the result screen
+        // (sub_14043ABF0, at 0x14043B0C4) looks up the player slot's Raider id (slot +0x11C) in it and reads the
+        // entry without checking it was found: with an empty list the game crashed (live 2026-11-11, 0x14043B0E2,
+        // null read; Raider = Cell, id 100). The request carries that id as argument 2 (live: [battleId, 1, 100,
+        // 2, ...]), so one entry for it is returned, rank row 0 and no gains.
+        api.MapPost("/battle/result", async (HttpRequest request, ApiResponseService responses, CancellationToken ct) =>
         {
+            var raiderEntries = new List<object?>();
+            try
+            {
+                var body = ObjectTree.List(await MessagePackHttp.ReadAsync(request, ct), 2);
+                var args = ObjectTree.List(body[1], 3);
+                raiderEntries.Add(new object?[] { ObjectTree.Int32(args[2]), 0, 0, 0 });
+            }
+            catch (Exception)
+            {
+                // Unreadable request: keep the list empty (survivor results never read it).
+            }
+
             object?[] pass =
             [
                 9,
@@ -426,7 +445,7 @@ public static class ApiEndpoints
                 new object?[] { 1, 1, Array.Empty<object?>(), Array.Empty<object?>() },
                 Array.Empty<object?>(),
                 new object?[] { 0, 0, 0, 0, "2050-12-31 14:59:59" },
-                Array.Empty<object?>(),
+                raiderEntries.ToArray(),
                 1.0,
                 new object?[] { 0, 0 }
             });
