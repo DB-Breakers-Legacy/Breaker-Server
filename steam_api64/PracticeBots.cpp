@@ -795,6 +795,50 @@ namespace
         Logger::Info("PracticeBots: practice Raider patrol points are loaded in every match (gate 0x14070D8C3 patched)");
     }
 
+    // Writes `size` bytes at g_Base + rva, only when the bytes there are exactly `expected`.
+    bool PatchBytes(std::uintptr_t rva, const std::uint8_t* expected, const std::uint8_t* replacement, std::size_t size, const char* name)
+    {
+        auto* code = reinterpret_cast<std::uint8_t*>(g_Base + rva);
+        if (std::memcmp(code, expected, size) != 0)
+        {
+            Logger::Error(std::string("PracticeBots: ") + name + " bytes differ from the expected ones - not patched");
+            return false;
+        }
+        DWORD old = 0;
+        if (!VirtualProtect(code, size, PAGE_EXECUTE_READWRITE, &old))
+        {
+            Logger::Error(std::string("PracticeBots: VirtualProtect failed - ") + name + " not patched");
+            return false;
+        }
+        std::memcpy(code, replacement, size);
+        VirtualProtect(code, size, old, &old);
+        FlushInstructionCache(GetCurrentProcess(), code, size);
+        return true;
+    }
+
+    // Raider bot starts as Larva Cell (raider_bot_larva, on by default with casual_bots=1; 2026-11-11).
+    // The AI Raider spawn path sub_1408B71A0 has, at 0x1408B7592:
+    //     if (sub_140206F30(raider))          // Raider (+0x204 == 1), Raider id +0x20C == 7 (Cell), level 1
+    //         sub_1408B4AB0(raider, 2, 0);    // Possible_SetRaiderLevel(character, level, force) -> level 2
+    // so an AI-controlled Cell skips Larva. A player Cell does not go through this and starts at level 1.
+    // Patch 1: the "je" after the test becomes "jmp", so the bot stays level 1.
+    // Patch 2: the practice patrol update (SimpleAIActionPracticePatrol vfunc_4, 0x1402C9110) does nothing while
+    // the Raider's level is <= 1 (cmp eax,1 ; jle at 0x1402C9155) - the reason the developers skipped Larva.
+    // The jle is replaced with NOPs so Larva Cell patrols (and our absorb walk, which drives the patrol, works).
+    constexpr std::uintptr_t kCellLevel2Rva = 0x8B7599;
+    constexpr std::uintptr_t kPatrolLevelGateRva = 0x2C9155;
+    void PatchLarvaStart()
+    {
+        static const std::uint8_t skipExpected[2] = { 0x74, 0x2A };       // je short 0x1408B75C5
+        static const std::uint8_t skipReplace[2] = { 0xEB, 0x2A };        // jmp short 0x1408B75C5
+        static const std::uint8_t gateExpected[6] = { 0x0F, 0x8E, 0x3A, 0x02, 0x00, 0x00 };   // jle 0x1402C9395
+        static const std::uint8_t gateReplace[6] = { 0x90, 0x90, 0x90, 0x90, 0x90, 0x90 };
+        const bool skip = PatchBytes(kCellLevel2Rva, skipExpected, skipReplace, 2, "Cell level-2 start (0x1408B7599)");
+        const bool gate = PatchBytes(kPatrolLevelGateRva, gateExpected, gateReplace, 6, "patrol level gate (0x1402C9155)");
+        if (skip && gate)
+            Logger::Info("PracticeBots: the Raider bot starts as Larva Cell (level 1) and patrols at level 1 (raider_bot_larva)");
+    }
+
     bool Hook(std::uintptr_t rva, void* detour, void** original, void** target, const char* name)
     {
         *target = reinterpret_cast<void*>(g_Base + rva);
@@ -850,6 +894,8 @@ bool PracticeBots::Init()
         Logger::Info("PracticeBots: normal matches are filled with bots too (casual_bots=1)");
         PatchPracticePatrolLoad();
         g_RaiderAbsorb = GetPrivateProfileIntA("steam", "raider_absorb", 1, SteamConfig::GetPath().c_str()) != 0;
+        if (GetPrivateProfileIntA("steam", "raider_bot_larva", 1, SteamConfig::GetPath().c_str()) != 0)
+            PatchLarvaStart();
         g_EnergyTest = GetPrivateProfileIntA("steam", "raider_bot_energy_test", 0, SteamConfig::GetPath().c_str()) != 0;
         char rate[32] = {};
         GetPrivateProfileStringA("steam", "raider_bot_energy_rate", "1.6", rate, sizeof(rate), SteamConfig::GetPath().c_str());
