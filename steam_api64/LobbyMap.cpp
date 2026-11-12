@@ -171,6 +171,100 @@ namespace
         }
     }
 
+    // Lobby lift (lobby_lift_y=<units>, needs lobby_map): F8 dumps (2026-11-11) put the lobby island at height 0
+    // around the map origin (pieces from -14 to +16) and the Cell Games platform on Highland River at height 32.34
+    // around the same origin (player in its middle: 1.32, 32.34, 2.21). So the lobby pieces and the player are raised
+    // once each by lobby_lift_y after they spawn. Moved: the lobby piece classes (vtables 0x141250000 and up) and
+    // the player/NPC characters (Mob 0x1411787A0); bulk classes (more than 16 objects) are left alone.
+    float g_LiftY = 0.0f;
+    constexpr std::uintptr_t kMobVftableRva = 0x11787A0;
+
+    bool LiftUnit(std::uint32_t handle, float dy, std::uintptr_t& vtableRva)
+    {
+        __try
+        {
+            const auto unit = *reinterpret_cast<std::uintptr_t*>(g_Base + kHandleTableRva + static_cast<std::uintptr_t>(handle) * 16);
+            if (unit == 0)
+                return false;
+            vtableRva = *reinterpret_cast<std::uintptr_t*>(unit) - g_Base;
+            if (vtableRva != kMobVftableRva && (vtableRva < 0x1250000 || vtableRva > 0x1800000))
+                return false;
+            auto* pos = reinterpret_cast<float*>(unit + kUnitPosition);
+            pos[1] += dy;
+            return true;
+        }
+        __except (EXCEPTION_EXECUTE_HANDLER)
+        {
+            return false;
+        }
+    }
+
+    std::uint32_t CurrentMap()
+    {
+        __try
+        {
+            const auto game = *reinterpret_cast<std::uintptr_t*>(g_Base + 0x177E470);
+            return game != 0 ? *reinterpret_cast<std::uint32_t*>(game + 0x20) : 0;
+        }
+        __except (EXCEPTION_EXECUTE_HANDLER)
+        {
+            return 0;
+        }
+    }
+
+    std::uintptr_t ObjectAt(std::uint32_t handle)
+    {
+        __try { return *reinterpret_cast<std::uintptr_t*>(g_Base + kHandleTableRva + static_cast<std::uintptr_t>(handle) * 16); }
+        __except (EXCEPTION_EXECUTE_HANDLER) { return 0; }
+    }
+
+    DWORD WINAPI LiftThread(LPVOID)
+    {
+        std::map<std::uint32_t, std::uintptr_t> lifted;   // handle -> object, so a reused handle is lifted again
+        for (;;)
+        {
+            Sleep(500);
+            if (CurrentMap() != kLobbyMap)
+            {
+                lifted.clear();
+                continue;
+            }
+            std::vector<UnitInfo> units;
+            std::map<std::uintptr_t, int> perClass;
+            for (std::uint32_t h = 0; h < kHandleTableSize; ++h)
+            {
+                UnitInfo u{};
+                if (ReadUnit(h, u))
+                {
+                    units.push_back(u);
+                    ++perClass[u.vtableRva];
+                }
+            }
+            int moved = 0;
+            for (const auto& u : units)
+            {
+                if (perClass[u.vtableRva] > 16)
+                    continue;
+                const auto object = ObjectAt(u.handle);
+                const auto it = lifted.find(u.handle);
+                if (it != lifted.end() && it->second == object)
+                    continue;
+                std::uintptr_t vtableRva = 0;
+                if (LiftUnit(u.handle, g_LiftY, vtableRva))
+                {
+                    lifted[u.handle] = object;
+                    ++moved;
+                    char line[160];
+                    sprintf_s(line, "LobbyLift: raised handle %u (vtable 0x%llX) from %.2f to %.2f", u.handle,
+                        static_cast<unsigned long long>(0x140000000ull + vtableRva), u.y, u.y + g_LiftY);
+                    Logger::Info(line);
+                }
+            }
+            if (moved > 0)
+                Logger::Flush();
+        }
+    }
+
     bool HookOne(std::uintptr_t rva, void* detour, void** original, void** target, const char* name)
     {
         *target = reinterpret_cast<void*>(g_Base + rva);
@@ -203,6 +297,14 @@ bool LobbyMap::Init()
     const bool name = HookOne(kMapNameRva, reinterpret_cast<void*>(&MapNameDetour),
         reinterpret_cast<void**>(&g_OriginalMapName), &g_MapNameTarget, "sub_140848DB0");
     Logger::Info("LobbyMap: the lobby's map files will come from map " + std::to_string(g_TargetMap) + " (lobby_map)");
+    char lift[32] = {};
+    GetPrivateProfileStringA("steam", "lobby_lift_y", "", lift, sizeof(lift), SteamConfig::GetPath().c_str());
+    g_LiftY = static_cast<float>(atof(lift));
+    if (g_LiftY != 0.0f)
+    {
+        CreateThread(nullptr, 0, &LiftThread, nullptr, 0, nullptr);
+        Logger::Info(std::string("LobbyLift: lobby pieces and the player are raised by ") + lift + " (lobby_lift_y)");
+    }
     return dir && name;
 }
 
