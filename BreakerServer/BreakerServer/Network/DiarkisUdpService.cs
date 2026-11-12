@@ -53,7 +53,12 @@ public sealed class DiarkisUdpService(
     private const ushort CmdCasualConnection = 22000;            // 0x55F0, casual connection room 22xxx -> 23xxx
     // Normal matchmaking autofill: when no real player has joined this long after the role request, the room
     // is filled with bot members and the match starts (the client DLL adds the bots in the match).
-    private static readonly TimeSpan CasualAutofillAfter = TimeSpan.FromSeconds(30);
+    // 2026-11-12, project lead: bots join at the start of matchmaking for now ("until i tell you otherwise"), so
+    // the default is 1 s (just after the search screen shows). BREAKER_AUTOFILL_SECONDS overrides it (30 = the
+    // earlier behaviour: search for real players for 30 s first).
+    private static readonly TimeSpan CasualAutofillAfter = TimeSpan.FromSeconds(
+        double.TryParse(Environment.GetEnvironmentVariable("BREAKER_AUTOFILL_SECONDS"), System.Globalization.NumberStyles.Float,
+            System.Globalization.CultureInfo.InvariantCulture, out var autofillSeconds) && autofillSeconds >= 0 ? autofillSeconds : 1);
     private const ushort CmdRoomLeave = 102;                     // 0x0066, Diarkis built-in room command (ver 1)
     private const ushort CmdRoomRegister = 115;                 // 0x0073, Diarkis built-in room command (ver 1)
     private const ushort CmdPracticeConnection = 42000;         // 0xA410, connection room 42xxx -> 43xxx (session listener)
@@ -608,7 +613,7 @@ public sealed class DiarkisUdpService(
             await SendDatAsync(udp, session, b, version, 0x01, request.Reply(b + 118, openJson), ct);
 
             // Normal matchmaking: 12017 is "begin matchmaking". The match is only found by the autofill
-            // timer (30 s from here), never at once (2026-11-11: an immediate 12105 plus the later one left the
+            // timer (CasualAutofillAfter from here, after the search room below), never at once (2026-11-11: an immediate 12105 plus the later one left the
             // client loading forever).
             if (b == CmdCasualRoom)
             {
