@@ -19,7 +19,7 @@
 // So now the game's own number stays 9000, and only the map-name lookups used by the map's own files are
 // answered with the new map: sub_140848D70 (folder) and sub_140848DB0 (name) on table 133 (MapListData), when
 // called from the map file loaders (ground, object instances, layouts: 0x140424810..0x14042C900), the map
-// package path (sub_14042C280), the world/sky (sub_14031F360) and the smoke volume (sub_1403B7890). The lobby
+// package path (sub_14042C280) and the smoke volume (sub_1403B7890). The world/sky object keeps 9000. The lobby
 // object layout (lobbyobject.lopt, sub_1404273B0) keeps the lobby's.
 namespace
 {
@@ -31,12 +31,13 @@ namespace
     // Callers (RVA ranges) that get the new map.
     constexpr Range kSwitched[] = {
         { 0x424810, 0x42C900 },  // per-map point data loaders + map package path sub_14042C280
-        { 0x31F360, 0x31F500 },  // world / sky (sub_14031F360)
         { 0x3B7890, 0x3B7A00 },  // smoke volume path (sub_1403B7890)
     };
     // Callers that keep the lobby's map even inside a switched range.
     constexpr Range kKept[] = {
         { 0x4273B0, 0x427690 },  // lobbyobject.lopt (sub_1404273B0)
+        // Test 4 (2026-11-11): with the world/sky object (sub_14031F360, outside the ranges above) also switched,
+        // the lobby never left the loading screen - it likely waits for the new map's area data. It stays 9000.
     };
 
     using MapLookupFn = const char*(__fastcall*)(std::uintptr_t, std::uint32_t);
@@ -68,6 +69,7 @@ namespace
             sprintf_s(line, "LobbyMap: %s lookup for 9000 from 0x%llX -> %u", which,
                 static_cast<unsigned long long>(0x140000000ull + rva), switched ? g_TargetMap : kLobbyMap);
             Logger::Info(line);
+            Logger::Flush();
         }
         return switched ? g_TargetMap : map;
     }
