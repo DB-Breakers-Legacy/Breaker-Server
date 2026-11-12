@@ -873,19 +873,27 @@ namespace
     //     if (sub_140206F30(raider))          // Raider (+0x204 == 1), Raider id +0x20C == 7 (Cell), level 1
     //         sub_1408B4AB0(raider, 2, 0);    // Possible_SetRaiderLevel(character, level, force) -> level 2
     // so an AI-controlled Cell skips Larva. A player Cell does not go through this and starts at level 1.
-    // Patch 1: the "je" after the test becomes "jmp", so the bot stays level 1.
+    // Test 1 (2026-11-12): did not help - the bot's +0x20C is 0, so this check never applies to it. Removed.
+    // The real spot (level trace 2026-11-12, call chain 0x14066250E <- 0x140662A26 <- 0x140667FD4 <- 0x14066739C):
+    // the character spawn routine sub_1406622F0 does, for a Raider whose character id (+0x200) is in the table at
+    // 0x1411A8540 (+0x1FC == 1 or 3, sub_140207320) and whose brain is not type 3 (sub_140202AF0, i.e. not a human):
+    //     if (raider->+0x204 == 1) {                  // cmp [rcx+204h],1 ; jne 0x14066253A  at 0x1406624E0
+    //         sub_140213C60(raider, 2);               // pending level (+0x1224) = 2
+    //         sub_1401FE680(raider, 2, 4, ...);       // -> sub_140223640 Possible_ApplyRaiderLevel
+    //         sub_140120520(raider +0x598, 2, 1, 0); }
+    // Patch 1: that jne becomes jmp, so the AI Raider keeps the level 1 it was spawned with.
     // Patch 2: the practice patrol update (SimpleAIActionPracticePatrol vfunc_4, 0x1402C9110) does nothing while
     // the Raider's level is <= 1 (cmp eax,1 ; jle at 0x1402C9155) - the reason the developers skipped Larva.
     // The jle is replaced with NOPs so Larva Cell patrols (and our absorb walk, which drives the patrol, works).
-    constexpr std::uintptr_t kCellLevel2Rva = 0x8B7599;
+    constexpr std::uintptr_t kAiRaiderLevel2Rva = 0x6624E0;
     constexpr std::uintptr_t kPatrolLevelGateRva = 0x2C9155;
     void PatchLarvaStart()
     {
-        static const std::uint8_t skipExpected[2] = { 0x74, 0x2A };       // je short 0x1408B75C5
-        static const std::uint8_t skipReplace[2] = { 0xEB, 0x2A };        // jmp short 0x1408B75C5
+        static const std::uint8_t skipExpected[2] = { 0x75, 0x58 };       // jne short 0x14066253A
+        static const std::uint8_t skipReplace[2] = { 0xEB, 0x58 };        // jmp short 0x14066253A
         static const std::uint8_t gateExpected[6] = { 0x0F, 0x8E, 0x3A, 0x02, 0x00, 0x00 };   // jle 0x1402C9395
         static const std::uint8_t gateReplace[6] = { 0x90, 0x90, 0x90, 0x90, 0x90, 0x90 };
-        const bool skip = PatchBytes(kCellLevel2Rva, skipExpected, skipReplace, 2, "Cell level-2 start (0x1408B7599)");
+        const bool skip = PatchBytes(kAiRaiderLevel2Rva, skipExpected, skipReplace, 2, "AI Raider level-2 start (0x1406624E0)");
         const bool gate = PatchBytes(kPatrolLevelGateRva, gateExpected, gateReplace, 6, "patrol level gate (0x1402C9155)");
         if (skip && gate)
             Logger::Info("PracticeBots: the Raider bot starts as Larva Cell (level 1) and patrols at level 1 (raider_bot_larva)");
