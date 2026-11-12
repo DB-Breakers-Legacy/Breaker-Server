@@ -182,6 +182,9 @@ namespace
     // the player/NPC characters (Mob 0x1411787A0); bulk classes (more than 16 objects) are left alone.
     float g_LiftY = 0.0f;
     constexpr std::uintptr_t kMobVftableRva = 0x11787A0;
+    // Test 16 (2026-11-11): the player stayed on the platform; the lobby NPCs (LobbyNpcCharacter, a UnitCharacter)
+    // were put back 45-54 times each - their physics body pulled them down. They are warped like the player.
+    constexpr std::uintptr_t kLobbyNpcVftableRva = 0x1255398;
 
     // Test 7 (2026-11-11): writing +0x60 from a side thread changed the stored value but nothing moved on screen;
     // the player's physics body keeps its own position. Characters now go through the game's warp
@@ -202,7 +205,7 @@ namespace
             if (vtableRva != kMobVftableRva && (vtableRva < 0x1250000 || vtableRva > 0x1800000))
                 return false;
             auto* pos = reinterpret_cast<float*>(unit + kUnitPosition);
-            if (vtableRva == kMobVftableRva)
+            if (vtableRva == kMobVftableRva || vtableRva == kLobbyNpcVftableRva)
             {
                 alignas(16) float target[4] = { pos[0], dy + 0.5f, pos[2], pos[3] };
                 reinterpret_cast<WarpFn>(g_Base + kWarpRva)(unit, target, 0, 1);
