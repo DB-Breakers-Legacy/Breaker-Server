@@ -179,6 +179,14 @@ namespace
     float g_LiftY = 0.0f;
     constexpr std::uintptr_t kMobVftableRva = 0x11787A0;
 
+    // Test 7 (2026-11-11): writing +0x60 from a side thread changed the stored value but nothing moved on screen;
+    // the player's physics body keeps its own position. Characters now go through the game's warp
+    // (sub_140213410(character, &position, 0, 1): used by SimpleAIActionPracticeWarp; sets +0x60 via the unit
+    // setter 0x140C208E0, copies it to +0x70, moves the physics body at +0xA50, sets the moved flags), and all of
+    // it runs on the game thread from the lobby update.
+    constexpr std::uintptr_t kWarpRva = 0x213410;
+    using WarpFn = std::uint64_t(__fastcall*)(std::uintptr_t, const float*, std::uint64_t, std::uint64_t);
+
     bool LiftUnit(std::uint32_t handle, float dy, std::uintptr_t& vtableRva)
     {
         __try
@@ -190,7 +198,15 @@ namespace
             if (vtableRva != kMobVftableRva && (vtableRva < 0x1250000 || vtableRva > 0x1800000))
                 return false;
             auto* pos = reinterpret_cast<float*>(unit + kUnitPosition);
-            pos[1] += dy;
+            if (vtableRva == kMobVftableRva)
+            {
+                alignas(16) float target[4] = { pos[0], pos[1] + dy, pos[2], pos[3] };
+                reinterpret_cast<WarpFn>(g_Base + kWarpRva)(unit, target, 0, 1);
+            }
+            else
+            {
+                pos[1] += dy;
+            }
             return true;
         }
         __except (EXCEPTION_EXECUTE_HANDLER)
@@ -218,16 +234,19 @@ namespace
         __except (EXCEPTION_EXECUTE_HANDLER) { return 0; }
     }
 
-    DWORD WINAPI LiftThread(LPVOID)
+    std::map<std::uint32_t, std::uintptr_t> g_Lifted;   // handle -> object, so a reused handle is lifted again
+    int g_LiftFrame = 0;
+
+    void LiftTick()
     {
-        std::map<std::uint32_t, std::uintptr_t> lifted;   // handle -> object, so a reused handle is lifted again
-        for (;;)
+        auto& lifted = g_Lifted;
         {
-            Sleep(500);
+            if (++g_LiftFrame % 15 != 0)
+                return;
             if (CurrentMap() != kLobbyMap)
             {
                 lifted.clear();
-                continue;
+                return;
             }
             std::vector<UnitInfo> units;
             std::map<std::uintptr_t, int> perClass;
@@ -263,6 +282,17 @@ namespace
             if (moved > 0)
                 Logger::Flush();
         }
+    }
+
+    constexpr std::uintptr_t kLobbyUpdateRva = 0x677520;   // GamePhaseLobby update (vtable slot 9), every frame
+    using LobbyUpdateFn = void(__fastcall*)(std::uintptr_t);
+    LobbyUpdateFn g_OriginalLobbyUpdate = nullptr;
+    void* g_LobbyUpdateTarget = nullptr;
+
+    void __fastcall LobbyUpdateDetour(std::uintptr_t lobby)
+    {
+        g_OriginalLobbyUpdate(lobby);
+        LiftTick();
     }
 
     bool HookOne(std::uintptr_t rva, void* detour, void** original, void** target, const char* name)
@@ -302,7 +332,8 @@ bool LobbyMap::Init()
     g_LiftY = static_cast<float>(atof(lift));
     if (g_LiftY != 0.0f)
     {
-        CreateThread(nullptr, 0, &LiftThread, nullptr, 0, nullptr);
+        HookOne(kLobbyUpdateRva, reinterpret_cast<void*>(&LobbyUpdateDetour),
+            reinterpret_cast<void**>(&g_OriginalLobbyUpdate), &g_LobbyUpdateTarget, "0x140677520 (lobby update)");
         Logger::Info(std::string("LobbyLift: lobby pieces and the player are raised by ") + lift + " (lobby_lift_y)");
     }
     return dir && name;
@@ -310,7 +341,7 @@ bool LobbyMap::Init()
 
 void LobbyMap::Shutdown()
 {
-    for (void** target : { &g_MapDirTarget, &g_MapNameTarget })
+    for (void** target : { &g_MapDirTarget, &g_MapNameTarget, &g_LobbyUpdateTarget })
     {
         if (*target)
             HookManager::Disable(*target);
