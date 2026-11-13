@@ -138,6 +138,55 @@ public sealed class ApiIntegrationTests : IClassFixture<BreakerApiFactory>
         Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
     }
 
+    // Official reply for args [[[30810, 10]]] was [0, [[30810, 10, 1]], 0]; the level is then kept in
+    // character/get part 3 as [skillId, level, flag, date] (flag 1 = trained).
+    [Fact]
+    public async Task SkillTrainingRepliesLikeOfficialAndSavesTheLevel()
+    {
+        const long trainer = 76561198000000002;
+        var token = await Authenticate(trainer, trainer);
+        using var response = await Post(
+            "/dbtb-prd/025348/api/skill/training",
+            new object?[]
+            {
+                new Dictionary<string, object?> { ["userId"] = token },
+                new object?[] { new object?[] { new object?[] { 30810, 10 } } }
+            });
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        var reply = ObjectTree.List(ObjectTree.List(await ReadResponse(response))[1]);
+        Assert.Equal(3, reply.Count);
+        Assert.Equal(0, ObjectTree.Int32(reply[0]));
+        var row = ObjectTree.List(ObjectTree.List(reply[1]).Single());
+        Assert.Equal(new[] { 30810, 10, 1 }, row.Select(ObjectTree.Int32).ToArray());
+        Assert.Equal(0, ObjectTree.Int32(reply[2]));
+
+        using var characters = await Post("/dbtb-prd/025348/api/character/get", AuthenticatedBody(token));
+        var skills = ObjectTree.List(ObjectTree.List(ObjectTree.List(await ReadResponse(characters))[1])[3]);
+        var saved = skills.Select(v => ObjectTree.List(v)).Single(x => ObjectTree.Int32(x[0]) == 30810);
+        Assert.Equal(10, ObjectTree.Int32(saved[1]));
+        Assert.Equal(1, ObjectTree.Int32(saved[2]));
+    }
+
+    // Raider 300 starts with 6 skills. `rows.Select(ObjectTree.List)` passed each item's position as the
+    // minimum size, so the 4th two-value skill entry threw and skill reset answered 400 for every Raider.
+    [Fact]
+    public async Task RaiderSkillResetWorksForRaiderWithManySkills()
+    {
+        const long resetter = 76561198000000003;
+        var token = await Authenticate(resetter, resetter);
+        using var response = await Post(
+            "/dbtb-prd/025348/api/rival/skill_reset",
+            new object?[]
+            {
+                new Dictionary<string, object?> { ["userId"] = token },
+                new object?[] { 300 }
+            });
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        var reply = ObjectTree.List(ObjectTree.List(await ReadResponse(response))[1]);
+        Assert.Equal(0, ObjectTree.Int32(reply[0]));
+        Assert.Equal(300, ObjectTree.Int32(ObjectTree.List(reply[1])[0]));
+    }
+
     [Fact]
     public void RequestBodyLimitIsEnforcedByKestrel() =>
         Assert.Equal(

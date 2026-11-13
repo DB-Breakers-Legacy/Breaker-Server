@@ -46,7 +46,6 @@ public static class ApiEndpoints
         Static("/lootbox/ticket_master_list", "ticketMasterList");
         Static("/leaderboard/get_leaderboard_model", "getLeaderboardModel");
         Static("/user/update_avatar", "updateAvatar");
-        Static("/skill/training", "skillTraining");
         Static("/battle/waittime_preview", "waittimePreview");
         Static("/battle/pre_matching_connection", "preMatchingConnection");
         Static("/battle/save_matching_cache", "saveMatchingCache");
@@ -154,18 +153,18 @@ public static class ApiEndpoints
             var requested = ObjectTree.Int32(ObjectTree.List(body[1], 1)[0]);
             var rivals = ObjectTree.List(accounts.Rivals(user));
             var rows = ObjectTree.List(rivals[1]);
-            var raider = rows.Select(ObjectTree.List)
+            var raider = rows.Select(v => ObjectTree.List(v))
                 .FirstOrDefault(x => ObjectTree.Int32(x[0]) == requested)
                 ?? throw new InvalidDataException("The requested rival does not exist.");
 
             var points = ObjectTree.Int32(raider[3]);
-            foreach (var item in ObjectTree.List(raider[4]).Select(ObjectTree.List))
+            foreach (var item in ObjectTree.List(raider[4]).Select(v => ObjectTree.List(v)))
             {
                 points += ObjectTree.Int32(item[1]);
                 item[1] = 0;
             }
 
-            foreach (var item in ObjectTree.List(raider[5]).Select(ObjectTree.List))
+            foreach (var item in ObjectTree.List(raider[5]).Select(v => ObjectTree.List(v)))
             {
                 points += ObjectTree.Int32(item[1]);
                 item[1] = 0;
@@ -199,7 +198,7 @@ public static class ApiEndpoints
                 var raiderId = ObjectTree.Int32(train[0]);
                 var skillId = ObjectTree.Int32(train[1]);
                 var newLevel = ObjectTree.Int32(train[2]);
-                var raider = rows.Select(ObjectTree.List)
+                var raider = rows.Select(v => ObjectTree.List(v))
                     .FirstOrDefault(x => ObjectTree.Int32(x[0]) == raiderId)
                     ?? throw new InvalidDataException("The requested rival does not exist.");
                 var left = ObjectTree.Int32(raider[3]) - newLevel;
@@ -208,9 +207,9 @@ public static class ApiEndpoints
                     break;
 
                 raider[3] = left;
-                var skills = ObjectTree.List(raider[4]).Select(ObjectTree.List).ToList();
+                var skills = ObjectTree.List(raider[4]).Select(v => ObjectTree.List(v)).ToList();
                 if (!skills.Any(x => ObjectTree.Int32(x[0]) == skillId))
-                    skills = ObjectTree.List(raider[5]).Select(ObjectTree.List).ToList();
+                    skills = ObjectTree.List(raider[5]).Select(v => ObjectTree.List(v)).ToList();
 
                 var target = skills.FirstOrDefault(x => ObjectTree.Int32(x[0]) == skillId);
                 if (target is not null)
@@ -219,11 +218,53 @@ public static class ApiEndpoints
 
             await accounts.SaveRivalsAsync(user, rivals, ct);
             var resultRows = rows
-                .Select(ObjectTree.List)
+                .Select(v => ObjectTree.List(v))
                 .Select(x => new object?[] { x[0], x[3], x[4], x[5] })
                 .ToList();
 
             return responses.Respond(new object?[] { 0, resultRows });
+        });
+
+        // Survivor skill training (ServerApiRequestExecuteSkillTraining). Official traffic (tutorial capture
+        // 2026-10-16): request args [[[skillId, level], ...]], reply [0, [[skillId, level, 1], ...], 0]. The reply
+        // reader sub_1407E1C40 reads [status, list of [skillId, level, flag] (sub_1407CA3A0), int]. The official
+        // server keeps the levels in character/get part 3 as [skillId, level, flag, date]: untouched skills are
+        // level 0 flag 0, trained ones level 20 (or 1 for one-level skills) flag 1. Free server: no cost taken.
+        api.MapPost("/skill/training", async (
+            HttpRequest request,
+            ApiResponseService responses,
+            RequestIdentityResolver identity,
+            AccountService accounts,
+            CancellationToken ct) =>
+        {
+            var bodyObj = await MessagePackHttp.ReadAsync(request, ct);
+            var body = ObjectTree.List(bodyObj, 2);
+            var user = await accounts.GetAsync(identity.ResolveUserId(bodyObj), ct);
+            var characters = ObjectTree.List(accounts.Characters(user));
+            var skills = ObjectTree.List(characters[3]);
+            var trained = new List<object?>();
+
+            foreach (var pair in ObjectTree.List(ObjectTree.List(body[1], 1)[0]).Select(x => ObjectTree.List(x, 2)))
+            {
+                var skillId = ObjectTree.Int32(pair[0]);
+                var level = ObjectTree.Int32(pair[1]);
+                var entry = skills.Select(v => ObjectTree.List(v)).FirstOrDefault(x => ObjectTree.Int32(x[0]) == skillId);
+                if (entry is null)
+                {
+                    entry = new List<object?> { skillId, level, 1, DateTimeOffset.Now.ToString("yyyy-MM-dd HH:mm:ss") };
+                    skills.Add(entry);
+                }
+                else
+                {
+                    entry[1] = level;
+                    entry[2] = 1;
+                }
+
+                trained.Add(new object?[] { skillId, level, 1 });
+            }
+
+            await accounts.SaveCharactersAsync(user, characters, ct);
+            return responses.Respond(new object?[] { 0, trained, 0 });
         });
 
         api.MapPost("/character/get", async (
@@ -314,7 +355,7 @@ public static class ApiEndpoints
             var user = await accounts.GetAsync(identity.ResolveUserId(bodyObj), ct);
             var characters = ObjectTree.List(accounts.Characters(user));
             var rows = ObjectTree.List(characters[1]);
-            var target = rows.Select(ObjectTree.List)
+            var target = rows.Select(v => ObjectTree.List(v))
                 .FirstOrDefault(x => ObjectTree.Int32(x[0]) == characterId)
                 ?? throw new InvalidDataException("The requested character does not exist.");
 
@@ -327,7 +368,7 @@ public static class ApiEndpoints
             await accounts.SaveCharactersAsync(user, characters, ct);
 
             var result = rows
-                .Select(ObjectTree.List)
+                .Select(v => ObjectTree.List(v))
                 .Select(x => new object?[]
                 {
                     x[0],
