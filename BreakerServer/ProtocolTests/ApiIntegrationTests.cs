@@ -187,6 +187,48 @@ public sealed class ApiIntegrationTests : IClassFixture<BreakerApiFactory>
         Assert.Equal(300, ObjectTree.Int32(ObjectTree.List(reply[1])[0]));
     }
 
+    // Routes added from the official checklist (2026-11-12): each answers OK with the official layout.
+    [Theory]
+    [InlineData("regularly_run/regularly_maintenance_check", 1)]
+    [InlineData("user/update_orientation_step", 1)]
+    [InlineData("report/report", 1)]
+    [InlineData("block/add_block_user", 1)]
+    [InlineData("friend/send_friend_request", 1)]
+    [InlineData("friend/get_friend_list", 4)]
+    [InlineData("commonpurchase/get_catalog", 2)]
+    [InlineData("commonpurchase/get_fund_settlement_text", 2)]
+    [InlineData("costume/get_list", 2)]
+    [InlineData("transball/get_list", 2)]
+    [InlineData("battle/orientation_start", 2)]
+    [InlineData("battle/orientation_result", 4)]
+    public async Task OfficialChecklistRoutesAnswerWithOfficialLayout(string path, int values)
+    {
+        const long player = 76561198000000004;
+        var token = await Authenticate(player, player);
+        using var response = await Post("/dbtb-prd/025348/api/" + path, AuthenticatedBody(token));
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        var reply = ObjectTree.List(ObjectTree.List(await ReadResponse(response))[1]);
+        Assert.Equal(values, reply.Count);
+        Assert.Equal(0, ObjectTree.Int32(reply[0]));
+    }
+
+    [Fact]
+    public async Task TutorialStageTwoCarriesTheRaiderEntry()
+    {
+        const long player = 76561198000000005;
+        var token = await Authenticate(player, player);
+        using var response = await Post(
+            "/dbtb-prd/025348/api/battle/orientation_result",
+            new object?[]
+            {
+                new Dictionary<string, object?> { ["userId"] = token },
+                new object?[] { "x_20261016014327", 2, "proof" }
+            });
+        var reply = ObjectTree.List(ObjectTree.List(await ReadResponse(response))[1]);
+        var raider = ObjectTree.List(ObjectTree.List(reply[3]).Single());
+        Assert.Equal(100, ObjectTree.Int32(raider[0]));
+    }
+
     [Fact]
     public void RequestBodyLimitIsEnforcedByKestrel() =>
         Assert.Equal(

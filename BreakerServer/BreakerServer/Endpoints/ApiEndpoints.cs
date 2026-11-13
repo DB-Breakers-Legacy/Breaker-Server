@@ -442,6 +442,101 @@ public static class ApiEndpoints
         api.MapPost("/battle/practice_result", (ApiResponseService responses) =>
             responses.Respond(new object?[] { 0 }));
 
+        // ---- Calls the official server answers that we had no route for (official api reference\
+        // SERVER_CHECKLIST.md, 2026-11-12). Shapes copied from the official replies in the user's captures. ----
+
+        // Plain acknowledgements: the official reply is [0]. Free community server: reports, blocks and friend
+        // requests are accepted but not stored yet (no other players' data is kept).
+        foreach (var path in new[]
+                 {
+                     "/regularly_run/regularly_maintenance_check", // args [] -> [0]
+                     "/user/update_orientation_step",              // args [step] -> [0] (tutorial: [0] at the end)
+                     "/report/report",                             // args [int, text] -> [0]
+                     "/block/add_block_user",                      // args [[userId]] -> [0]
+                     "/friend/send_friend_request"                 // args [userId] -> [0]
+                 })
+            api.MapPost(path, (ApiResponseService responses) => responses.Respond(new object?[] { 0 }));
+
+        // Friend list: args [page, perPage, type] (official [1, 100, 0]); reply [0, page, total, entries]. Empty
+        // until we have our own friends feature (official empty reply: [0, 1, 0, []]).
+        api.MapPost("/friend/get_friend_list", async (HttpRequest request, ApiResponseService responses, CancellationToken ct) =>
+        {
+            var page = 1;
+            try
+            {
+                var body = ObjectTree.List(await MessagePackHttp.ReadAsync(request, ct), 2);
+                page = ObjectTree.Int32(ObjectTree.List(body[1], 1)[0]);
+            }
+            catch (Exception)
+            {
+                // Unreadable request: answer page 1.
+            }
+
+            return responses.Respond(new object?[] { 0, page, 0, Array.Empty<object?>() });
+        });
+
+        // Shop with real money (TP packs at USD prices on the official server). Free server: nothing is sold, so
+        // the catalog is empty. Official reply [0, [[id, name, name, "", price, price, json], ...]].
+        api.MapPost("/commonpurchase/get_catalog", (ApiResponseService responses) =>
+            responses.Respond(new object?[] { 0, Array.Empty<object?>() }));
+
+        // Legal payment notice (official: a long Japanese text). args [language] -> [0, text].
+        api.MapPost("/commonpurchase/get_fund_settlement_text", (ApiResponseService responses) =>
+            responses.Respond(new object?[] { 0, FreeServerNotice }));
+
+        // Owned costumes: args [] -> [0, [[costumeId, date], ...]]; the official list equals character/get_item
+        // part 1 (same ids and dates), so the same part of our item reply is returned.
+        api.MapPost("/costume/get_list", (ApiResponseService responses, ResponseCatalog catalog) =>
+            responses.Respond(new object?[] { 0, ObjectTree.List(catalog.Get("getCharacterItems"), 2)[1] }));
+
+        // Survivor list for the transformation-ball screen: args [] -> [0, rows]; the official rows equal
+        // character/get part 1, so the player's own saved rows are returned.
+        api.MapPost("/transball/get_list", async (
+            HttpRequest request,
+            ApiResponseService responses,
+            RequestIdentityResolver identity,
+            AccountService accounts,
+            CancellationToken ct) =>
+        {
+            var body = await MessagePackHttp.ReadAsync(request, ct);
+            var user = await accounts.GetAsync(identity.ResolveUserId(body), ct);
+            return responses.Respond(new object?[] { 0, ObjectTree.List(accounts.Characters(user), 2)[1] });
+        });
+
+        // Tutorial ("orientation") battles 1-3. Start: args [stage] -> [0, "<userId>_<yyyyMMddHHmmss>"] (official
+        // id format). Only reached when user/create_user_info's third value is 1; ours sends 0 (tutorial skipped).
+        api.MapPost("/battle/orientation_start", async (
+            HttpRequest request,
+            ApiResponseService responses,
+            RequestIdentityResolver identity,
+            CancellationToken ct) =>
+        {
+            var body = await MessagePackHttp.ReadAsync(request, ct);
+            var userId = identity.ResolveUserId(body);
+            return responses.Respond(new object?[] { 0, $"{userId}_{DateTimeOffset.Now:yyyyMMddHHmmss}" });
+        });
+
+        // Tutorial result: args [battleId, stage, 128-char proof]. Reader sub_1407FAE70: [status, 5 ints
+        // (sub_1407CC8D0), list of [category, points] (sub_1407C7F70), list of 4-int entries (sub_1407CDA70, the
+        // same reader as battle/result field 8, whose missing Raider entry crashed the result screen on
+        // 2026-11-11)]. Meaning of the 5 ints not known yet, so the official reply for each stage is sent back
+        // unchanged (stage 2 is played as Cell = Raider 100 and carries his entry).
+        api.MapPost("/battle/orientation_result", async (HttpRequest request, ApiResponseService responses, CancellationToken ct) =>
+        {
+            var stage = 1;
+            try
+            {
+                var body = ObjectTree.List(await MessagePackHttp.ReadAsync(request, ct), 2);
+                stage = ObjectTree.Int32(ObjectTree.List(body[1], 2)[1]);
+            }
+            catch (Exception)
+            {
+                // Unreadable request: answer as stage 1.
+            }
+
+            return responses.Respond(OrientationResult(stage));
+        });
+
         // Battle result (ServerApiResponseBattleResult, parser 0x1407DB070, fields 0..10).
         // Field 8 (parser sub_1407CDA70 -> reply +0x240/+0x248) is a list of [raiderId, rankIndex, value, value]
         // (16-byte entries). When a normal match ends with the player as the Raider, the result screen
@@ -492,6 +587,56 @@ public static class ApiEndpoints
             });
         });
     }
+
+    // Official tutorial results (breakers tutorial.pcapng, 2026-10-16), one per stage.
+    private static object?[] OrientationResult(int stage) => stage switch
+    {
+        2 => new object?[]
+        {
+            0,
+            new object?[] { 2, 50, 4400, 5360, 0 },
+            new object?[]
+            {
+                new object?[] { "category_broke_super_timemachine", 200 },
+                new object?[] { "category_evolution", 100 },
+                new object?[] { "category_move", 0 },
+                new object?[] { "category_result", 200 },
+                new object?[] { "category_survivor", 150 }
+            },
+            new object?[] { new object?[] { 100, 2, 200, 1 } }
+        },
+        3 => new object?[]
+        {
+            0,
+            new object?[] { 3, 190, 6700, 5500, 0 },
+            new object?[]
+            {
+                new object?[] { "category_interact_system", 150 },
+                new object?[] { "category_move", 100 },
+                new object?[] { "category_raider_decoy", 0 },
+                new object?[] { "category_result", 200 },
+                new object?[] { "category_scramble", 150 }
+            },
+            Array.Empty<object?>()
+        },
+        _ => new object?[]
+        {
+            0,
+            new object?[] { 2, 50, 1800, 5205, 0 },
+            new object?[]
+            {
+                new object?[] { "category_alive", 100 },
+                new object?[] { "category_discover_key", 0 },
+                new object?[] { "category_interact_system", 150 },
+                new object?[] { "category_move", 100 },
+                new object?[] { "category_result", 150 }
+            },
+            Array.Empty<object?>()
+        }
+    };
+
+    private const string FreeServerNotice =
+        "DB Breakers Legacy is a free community server. Nothing is sold and no payment is taken.";
 
     private const string TokushoText =
         "This notification based on Japan's Act on Specified Commercial Transactions (Act No. 57 of 1976) " +
