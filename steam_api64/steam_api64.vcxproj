@@ -1,4 +1,4 @@
-<?xml version='1.0' encoding='utf-8'?>
+﻿<?xml version='1.0' encoding='utf-8'?>
 <Project xmlns="http://schemas.microsoft.com/developer/msbuild/2003" DefaultTargets="Build">
   <ItemGroup Label="ProjectConfigurations">
     <ProjectConfiguration Include="Debug|Win32">
@@ -211,6 +211,8 @@
     <ClInclude Include="BackendStatus.h" />
     <ClInclude Include="NetworkHooks.h" />
     <ClInclude Include="OnlineCheckBypass.h" />
+    <ClInclude Include="PracticeBots.h" />
+    <ClInclude Include="LobbyMap.h" />
     <ClInclude Include="sdk_includes\isteamapplist.h" />
     <ClInclude Include="sdk_includes\isteamapps.h" />
     <ClInclude Include="sdk_includes\isteamapps001.h" />
@@ -456,6 +458,8 @@
     <ClCompile Include="BackendStatus.cpp" />
     <ClCompile Include="NetworkHooks.cpp" />
     <ClCompile Include="OnlineCheckBypass.cpp" />
+    <ClCompile Include="PracticeBots.cpp" />
+    <ClCompile Include="LobbyMap.cpp" />
     <ClCompile Include="Auth\SteamAuth.cpp" />
     <ClCompile Include="Auth\LocalAuthTicket.cpp" />
     <ClCompile Include="Auth\AuthTicketRegistry.cpp" />
@@ -471,6 +475,7 @@
     <ClCompile Include="SteamInterfaceRouter.cpp" />
     <ClCompile Include="SteamLobbyManager.cpp" />
     <ClCompile Include="SteamNetworking.cpp" />
+    <ClCompile Include="SteamNetworkingInterfaces.cpp" />
     <ClCompile Include="SteamOfflineServer.cpp" />
     <ClCompile Include="SteamP2PManager.cpp" />
     <ClCompile Include="SteamPacketLogger.cpp" />

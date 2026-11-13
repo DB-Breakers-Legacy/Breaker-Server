@@ -322,10 +322,24 @@ namespace SteamCallbackManager
                 " receivers=" +
                 std::to_string(static_cast<unsigned long long>(callbacks.size())));
 
+            int delivered = 0;
             for (void* callback : callbacks)
             {
                 if (DispatchCallback(callback, msg))
+                {
                     ++dispatched;
+                    ++delivered;
+                }
+            }
+
+            // Diagnostic (2026-11-10): lobby (5xx) and P2P (12xx) callbacks, delivered or not.
+            if ((msg.CallbackID >= 500 && msg.CallbackID < 600) || (msg.CallbackID >= 1200 && msg.CallbackID < 1300))
+            {
+                Logger::Info(
+                    "Callback " + std::to_string(msg.CallbackID) +
+                    " bytes=" + std::to_string(static_cast<unsigned long long>(msg.Data.size())) +
+                    " receivers=" + std::to_string(static_cast<unsigned long long>(callbacks.size())) +
+                    " delivered=" + std::to_string(delivered));
             }
         }
 

@@ -5,6 +5,8 @@
 #include "HookManager.h"
 #include "NetworkHooks.h"
 #include "OnlineCheckBypass.h"
+#include "PracticeBots.h"
+#include "LobbyMap.h"
 #include "BackendStatus.h"
 
 #include "SteamConfig.h"
@@ -49,6 +51,10 @@ static DWORD WINAPI MainThread(LPVOID)
         Logger::Error("Breakers forced-true startup hooks failed to initialize");
 
     SteamConfig::Init();
+    if (!PracticeBots::Init())
+        Logger::Error("Practice survivor bot hooks failed to initialize");
+    if (!LobbyMap::Init())
+        Logger::Error("Lobby map hook failed to initialize");
     BackendStatus::Check();
     SteamIDManager::Init();
     SteamSessionManager::Init();
