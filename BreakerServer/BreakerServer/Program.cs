@@ -41,6 +41,7 @@ builder.Services.AddSingleton<IHostedService>(services => new DiarkisUdpService(
 builder.Services.AddHostedService<StunUdpService>();
 builder.Services.AddScoped<ApiResponseService>();
 builder.Services.AddScoped<AccountService>();
+builder.Services.AddScoped<OfficialSaveImporter>();
 builder.Services.AddScoped<UserAuthService>();
 builder.Services.AddScoped<RequestIdentityResolver>();
 
@@ -50,7 +51,11 @@ app.UseMiddleware<RequestTraceMiddleware>();
 app.UseMiddleware<CdnHeadersMiddleware>();
 
 using (var scope = app.Services.CreateScope())
-    scope.ServiceProvider.GetRequiredService<BreakerDbContext>().Database.EnsureCreated();
+{
+    var db = scope.ServiceProvider.GetRequiredService<BreakerDbContext>();
+    db.Database.EnsureCreated();
+    DatabaseUpgrade.Run(db);
+}
 
 app.MapGet("/health", () => Results.Ok(new
 {

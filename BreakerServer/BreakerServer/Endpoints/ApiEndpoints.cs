@@ -31,10 +31,33 @@ public static class ApiEndpoints
 
         Static("/sys/kpi", "envKPI");
         Static("/close/get_close_info", "getCloseInfo");
-        Static("/patroller/get_status", "getPatrollerStatus");
         Static("/avatar_create/get_list", "getAvatarCreateList");
-        Static("/character/get_item", "getCharacterItems");
         Static("/user/get_ban_status", "getBanStatus");
+
+        // Each player's own level / rank / season pass (server-wide parts from getPatrollerStatus) and owned items.
+        api.MapPost("/patroller/get_status", async (
+            HttpRequest request,
+            ApiResponseService responses,
+            RequestIdentityResolver identity,
+            AccountService accounts,
+            CancellationToken ct) =>
+        {
+            var body = await MessagePackHttp.ReadAsync(request, ct);
+            var user = await accounts.GetAsync(identity.ResolveUserId(body), ct);
+            return responses.Respond(accounts.Status(user));
+        });
+
+        api.MapPost("/character/get_item", async (
+            HttpRequest request,
+            ApiResponseService responses,
+            RequestIdentityResolver identity,
+            AccountService accounts,
+            CancellationToken ct) =>
+        {
+            var body = await MessagePackHttp.ReadAsync(request, ct);
+            var user = await accounts.GetAsync(identity.ResolveUserId(body), ct);
+            return responses.Respond(accounts.Items(user));
+        });
         Static("/commonpurchase/get_purchase_status", "getPurchaseStatus");
         Static("/item/item_possession", "getItemPossession");
         Static("/battle/get_challenge_list", "getChallengeList");
@@ -485,9 +508,18 @@ public static class ApiEndpoints
             responses.Respond(new object?[] { 0, FreeServerNotice }));
 
         // Owned costumes: args [] -> [0, [[costumeId, date], ...]]; the official list equals character/get_item
-        // part 1 (same ids and dates), so the same part of our item reply is returned.
-        api.MapPost("/costume/get_list", (ApiResponseService responses, ResponseCatalog catalog) =>
-            responses.Respond(new object?[] { 0, ObjectTree.List(catalog.Get("getCharacterItems"), 2)[1] }));
+        // part 1 (same ids and dates), so the same part of the player's own item reply is returned.
+        api.MapPost("/costume/get_list", async (
+            HttpRequest request,
+            ApiResponseService responses,
+            RequestIdentityResolver identity,
+            AccountService accounts,
+            CancellationToken ct) =>
+        {
+            var body = await MessagePackHttp.ReadAsync(request, ct);
+            var user = await accounts.GetAsync(identity.ResolveUserId(body), ct);
+            return responses.Respond(new object?[] { 0, ObjectTree.List(accounts.Items(user), 2)[1] });
+        });
 
         // Survivor list for the transformation-ball screen: args [] -> [0, rows]; the official rows equal
         // character/get part 1, so the player's own saved rows are returned.

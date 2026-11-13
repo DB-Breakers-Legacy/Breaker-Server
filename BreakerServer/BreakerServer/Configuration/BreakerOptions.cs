@@ -25,6 +25,10 @@ public sealed class BreakerOptions
         "Assets/News/2d986ba27f06455090b72be37c8b7d48.png";
 
     public string AdjustmentDataPath { get; set; } = string.Empty;
+
+    // Folder of official saves waiting to be imported (<steamId>.json, see OfficialSaveImporter). Empty = off.
+    public string ImportDir { get; set; } = string.Empty;
+
     public string DiarkisIvKey { get; set; } = string.Empty;
     public string DiarkisAesKey { get; set; } = string.Empty;
     public string DiarkisSidKey { get; set; } = string.Empty;

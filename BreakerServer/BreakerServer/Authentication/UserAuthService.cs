@@ -6,6 +6,7 @@ public sealed record UserAuthResult(bool Success, string AuthToken, string Ticke
 
 public sealed class UserAuthService(
     AccountService accounts,
+    OfficialSaveImporter importer,
     AuthSessionRegistry sessions,
     AccountTokenService tokens,
     ILogger<UserAuthService> logger)
@@ -24,7 +25,8 @@ public sealed class UserAuthService(
         if (localTicket.SteamId != (ulong)request.NumericId)
             return Failure("Local ticket does not match the requested user.");
 
-        await accounts.GetOrCreateAsync(request.NumericId, ct);
+        var user = await accounts.GetOrCreateAsync(request.NumericId, ct);
+        await importer.TryImportAsync(user, ct);
         var session = sessions.Create(request.NumericId, localTicket.Serial, tokens.TokenFor(request.NumericId));
 
         logger.LogInformation(
