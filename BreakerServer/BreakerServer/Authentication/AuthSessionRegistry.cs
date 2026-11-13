@@ -15,7 +15,8 @@ public sealed class AuthSessionRegistry(TimeProvider? clock = null)
     private readonly ConcurrentDictionary<string, Entry> _sessions = new(StringComparer.Ordinal);
     private readonly TimeProvider _clock = clock ?? TimeProvider.System;
 
-    public AuthSession Create(long userId, uint ticketSerial)
+    // token: the account's stable userId token (AccountTokenService); null makes a random one.
+    public AuthSession Create(long userId, uint ticketSerial, string? token = null)
     {
         var now = _clock.GetUtcNow();
         while (_sessions.Count >= MaxSessions)
@@ -24,7 +25,7 @@ public sealed class AuthSessionRegistry(TimeProvider? clock = null)
             if (oldest is null || _sessions.TryRemove(oldest, out _)) break;
         }
 
-        var session = Convert.ToHexString(RandomNumberGenerator.GetBytes(16));
+        var session = token ?? Convert.ToHexString(RandomNumberGenerator.GetBytes(16));
         var value = new AuthSession(userId, session, now, ticketSerial);
         _sessions[session] = new Entry(value, now.Add(Lifetime));
         return value;

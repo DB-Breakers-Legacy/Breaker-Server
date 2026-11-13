@@ -12,7 +12,9 @@ public sealed class BreakerOptions
     public string PrdHost { get; set; } = "127.0.0.1";
     public string AdvertisedHost { get; set; } = "127.0.0.1";
     public string StunHost { get; set; } = "127.0.0.1";
-    public int[] StunPorts { get; set; } = [3478, 3479];
+    // Empty default: configuration binding appends to a non-empty default array (it produced
+    // [3478, 3479, 3478, 3479]). Program.cs falls back to 3478/3479 when nothing is configured.
+    public int[] StunPorts { get; set; } = [];
     public string UdpHost { get; set; } = "127.0.0.1";
     public int UdpPort { get; set; } = 7100;
     public int UdpSessionPort { get; set; } = 7099;
@@ -23,8 +25,20 @@ public sealed class BreakerOptions
         "Assets/News/2d986ba27f06455090b72be37c8b7d48.png";
 
     public string AdjustmentDataPath { get; set; } = string.Empty;
+
+    // Folder of official saves waiting to be imported (<steamId>.json, see OfficialSaveImporter). Empty = off.
+    public string ImportDir { get; set; } = string.Empty;
+
     public string DiarkisIvKey { get; set; } = string.Empty;
     public string DiarkisAesKey { get; set; } = string.Empty;
     public string DiarkisSidKey { get; set; } = string.Empty;
     public string DiarkisHashKey { get; set; } = string.Empty;
+
+    // Optional development override: when all four keys are set, every session gets this fixed set.
+    // When none are set, each session gets fresh random keys.
+    public bool HasFixedDiarkisKeys =>
+        DiarkisSidKey.Length > 0 && DiarkisAesKey.Length > 0 && DiarkisIvKey.Length > 0 && DiarkisHashKey.Length > 0;
+
+    public bool HasAnyDiarkisKey =>
+        DiarkisSidKey.Length > 0 || DiarkisAesKey.Length > 0 || DiarkisIvKey.Length > 0 || DiarkisHashKey.Length > 0;
 }

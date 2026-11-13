@@ -34,15 +34,21 @@ the tutorial flow, but entering the actual game is not implemented yet**.
 
 ## Setup
 
-Configure four independent 16-byte Diarkis keys as hexadecimal strings. You can
-supply them with environment variables or .NET user-secrets. Do not commit them
-to `appsettings.json`. For example, in PowerShell:
+Diarkis session keys need no setup: the server issues a fresh set of four
+16-byte keys for every session (battle/get_diarkis_matching_server_info and
+battle/get_connection_server_info), as the official server did. For debugging you
+can pin one fixed set by setting all four as 32-character hex strings (environment
+variables or .NET user-secrets, never `appsettings.json`):
 
 ```powershell
+# optional, debugging only
 $env:Breaker__DiarkisIvKey = "<32 hexadecimal characters>"
 $env:Breaker__DiarkisAesKey = "<32 hexadecimal characters>"
 $env:Breaker__DiarkisSidKey = "<32 hexadecimal characters>"
 $env:Breaker__DiarkisHashKey = "<32 hexadecimal characters>"
+```
+
+```powershell
 dotnet restore BreakerServer/ProtocolTests/ProtocolTests.csproj
 dotnet build BreakerServer/BreakerServer/BreakerServer.csproj
 dotnet run --project BreakerServer/BreakerServer/BreakerServer.csproj
