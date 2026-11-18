@@ -1,0 +1,5 @@
+# Runtime data the server needs but that is NOT committed (captured game data / private images).
+# Start-BreakerServer.ps1 refuses to start if a present file doesn't match its hash.
+# Files live in work\runtime-data\ (copied there with -ImportRuntimeData).
+d5b2aea00d726b64681d537020e1d8218ae73bf7f8b01ba3d46feeac96f08e56  adjustmentdata.txt
+0a15f6ea0a4f30c950bc80de7568e9c62c3c73d2baffe6810eac260ce58d0941  news/legacy-news-test-05-niko.png

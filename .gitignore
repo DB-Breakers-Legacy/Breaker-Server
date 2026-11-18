@@ -1,17 +1,86 @@
+# .gitignore for Breaker-Server-main (proposed by breakers-sandbox/repo; replaces the current one)
+# Rule of thumb: commit source, project files, docs, tests, small text config and examples.
+# Never commit: build output, local state, secrets, captured traffic, player data, binaries we can rebuild.
+
+# ---- build output -------------------------------------------------------------
 [Bb]in/
 [Oo]bj/
 Build/
 TestResults/
-.vs/
+*.pdb
+*.ilk
+*.exp
+*.obj
+*.tlog
+*.lastbuildstate
+*.idb
+*.ipch
+x64/
 .sandbox-dotnet/
+
+# ---- IDE / OS -----------------------------------------------------------------
+.vs/
+.vscode/
+.idea/
 *.user
 *.suo
+*.swp
+Thumbs.db
+desktop.ini
+.DS_Store
+
+# ---- local server state & secrets --------------------------------------------
 *.db
 *.db-shm
 *.db-wal
+*.db.*
+breaker.db*
+account-token-secret.key
+*.key
+*.pem
+*.pfx
 .env
 .env.*
 !.env.example
 steam_config.ini
-Logs/
-account-token-secret.key
+secrets.json
+
+# ---- captured / personal data (lives outside the repo; see runtime-data/README.md)
+runtime-data/*
+!runtime-data/README.md
+!runtime-data/runtime-data.sha256
+captures/
+[Ll]ogs/
+*.log
+*.pcap
+*.pcapng
+*keylog*
+*.vdf
+save-backups/
+save-imports/
+official-saves/
+
+# ---- python ---------------------------------------------------------------------
+__pycache__/
+*.py[cod]
+.venv/
+.pytest_cache/
+
+# ---- archives / media / backups (keep these outside the repo) ------------------
+*.7z
+*.zip
+*.rar
+*.bundle
+*.mp4
+*.mkv
+*.bak
+*.orig
+*.rej
+
+# ---- vendored binaries that ARE still needed by the Visual Studio build --------
+# libMinHook.x64.lib is linked by steam_api64.vcxproj. The Docker build ignores it and builds MinHook
+# v1.3.4 from source instead. Keep it tracked until nobody builds in Visual Studio any more, then
+# `git rm --cached steam_api64/libMinHook.x64.lib` and vendor MinHook source instead.
+!steam_api64/libMinHook.x64.lib
+# sdk_includes.rar duplicates the extracted headers next to it and is not used by any build.
+# It is ignored for new commits; remove it from the index with:  git rm --cached steam_api64/sdk_includes/sdk_includes.rar
