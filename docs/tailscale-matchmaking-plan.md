@@ -62,7 +62,7 @@ Tooling (`breakers-sandbox`):
 * `run\Start-BreakerServer.ps1 -TailscaleIP 100.x.y.z` checks that the address is in 100.64.0.0/10 and
   assigned to this PC. It then sets bind and advertised hosts, and publishes container ports on that IP
   instead of 127.0.0.1.
-* `run\Set-TailscaleFirewall.ps1` (admin) adds firewall rules as a second boundary that doesn't depend on
+* `scripts\set-tailscale-firewall.ps1` in this repo (admin; also in the tooling as `run\Set-TailscaleFirewall.ps1`) adds firewall rules as a second boundary that doesn't depend on
   the mod code:
   - server ports allowed only from the tailnet;
   - the game's inbound UDP allowed only from the tailnet;
@@ -138,7 +138,7 @@ Do this only after M3. Each player follows the steps on their own PC.
    ```
    Tag the host PC `tag:breakers`. Tailscale ACLs can't restrict by protocol per port in this short form;
    the firewall script adds the UDP/TCP split.
-2. **Firewall (admin).** Host: `Set-TailscaleFirewall.ps1 -Server -GameExe <exe> -BlockGameOutbound`.
+2. **Firewall (admin).** Host: `scripts\set-tailscale-firewall.ps1 -Server -GameExe <exe> -BlockGameOutbound`.
    Player B: `-GameExe <exe> -BlockGameOutbound`.
 3. **Server (host).** `Start-BreakerServer.ps1 -Mode Host -TailscaleIP <host 100.x> -Capture`. Host mode is
    used because in a container the server sees remote players as the Docker gateway. `RequiredPlayers=2`
