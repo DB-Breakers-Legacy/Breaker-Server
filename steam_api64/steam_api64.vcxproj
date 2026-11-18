@@ -213,6 +213,8 @@
     <ClInclude Include="OnlineCheckBypass.h" />
     <ClInclude Include="PracticeBots.h" />
     <ClInclude Include="LobbyMap.h" />
+    <ClInclude Include="RaiderSupers.h" />
+    <ClInclude Include="AreaDestroyStack.h" />
     <ClInclude Include="sdk_includes\isteamapplist.h" />
     <ClInclude Include="sdk_includes\isteamapps.h" />
     <ClInclude Include="sdk_includes\isteamapps001.h" />
@@ -460,6 +462,8 @@
     <ClCompile Include="OnlineCheckBypass.cpp" />
     <ClCompile Include="PracticeBots.cpp" />
     <ClCompile Include="LobbyMap.cpp" />
+    <ClCompile Include="RaiderSupers.cpp" />
+    <ClCompile Include="AreaDestroyStack.cpp" />
     <ClCompile Include="Auth\SteamAuth.cpp" />
     <ClCompile Include="Auth\LocalAuthTicket.cpp" />
     <ClCompile Include="Auth\AuthTicketRegistry.cpp" />

@@ -34,8 +34,20 @@ public sealed class RequestTraceMiddleware(
                 FormatPreview(body));
         }
 
+        // With capture on, the reply is saved too (2026-11-13: "log everything from the beginning"): the response
+        // body goes to a buffer, is copied on to the game unchanged, and is written next to the request as
+        // <time>_<number>_<path>.reply.bin (same number as the request file).
+        var captureId = 0;
+        Stream? originalBody = null;
+        MemoryStream? replyBuffer = null;
         if (!string.IsNullOrWhiteSpace(CaptureDirectory))
-            await CaptureAsync(context.Request, context.RequestAborted);
+        {
+            captureId = Interlocked.Increment(ref _captureCounter);
+            await CaptureAsync(context.Request, captureId, context.RequestAborted);
+            originalBody = context.Response.Body;
+            replyBuffer = new MemoryStream();
+            context.Response.Body = replyBuffer;
+        }
 
         var stopwatch = Stopwatch.StartNew();
         try
@@ -44,6 +56,15 @@ public sealed class RequestTraceMiddleware(
         }
         finally
         {
+            if (replyBuffer is not null && originalBody is not null)
+            {
+                context.Response.Body = originalBody;
+                replyBuffer.Position = 0;
+                await replyBuffer.CopyToAsync(originalBody, context.RequestAborted);
+                await SaveReplyAsync(context.Request, captureId, replyBuffer);
+                await replyBuffer.DisposeAsync();
+            }
+
             stopwatch.Stop();
             var path = context.Request.Path.Value ?? string.Empty;
 
@@ -68,7 +89,24 @@ public sealed class RequestTraceMiddleware(
         }
     }
 
-    private async Task CaptureAsync(HttpRequest request, CancellationToken ct)
+    private async Task SaveReplyAsync(HttpRequest request, int captureId, MemoryStream reply)
+    {
+        try
+        {
+            if (reply.Length == 0 || reply.Length > CaptureLimit)
+                return;
+            Directory.CreateDirectory(CaptureDirectory!);
+            var name = (request.Path.Value ?? "root").Trim('/').Replace('/', '_');
+            var file = Path.Combine(CaptureDirectory!, $"{DateTime.Now:HHmmss}_{captureId:D4}_{name}.reply.bin");
+            await File.WriteAllBytesAsync(file, reply.ToArray());
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            logger.LogWarning(ex, "Reply capture failed");
+        }
+    }
+
+    private async Task CaptureAsync(HttpRequest request, int captureId, CancellationToken ct)
     {
         try
         {
@@ -84,7 +122,7 @@ public sealed class RequestTraceMiddleware(
             Directory.CreateDirectory(CaptureDirectory!);
             var name = (request.Path.Value ?? "root").Trim('/').Replace('/', '_');
             var file = Path.Combine(CaptureDirectory!,
-                $"{DateTime.Now:HHmmss}_{Interlocked.Increment(ref _captureCounter):D4}_{name}.bin");
+                $"{DateTime.Now:HHmmss}_{captureId:D4}_{name}.bin");
             await File.WriteAllBytesAsync(file, buffer.ToArray(), ct);
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)

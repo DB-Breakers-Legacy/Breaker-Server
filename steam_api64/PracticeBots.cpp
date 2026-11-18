@@ -941,10 +941,923 @@ namespace
         }
     }
 
+    // Counter-attack test key (counter_test_key, off by default; 2026-11-15). User: "lets do a test key for the
+    // counter attack". The Raider's strike back at a weaker survivor's Dragon Change melee hit is action entry 43
+    // of the Raider's own action file (state 0x43D29502). The game starts it when the character's requested
+    // reaction number, (character +0x590) -> +0x14, is 0x31: the state machine set-up sub_1401287F0 registers the
+    // condition sub_1401371F0 ("is the requested number 0x31?", then it sets the number back to 0). Survivors
+    // cannot transform and attack yet, so this key writes that number for the LOCAL PLAYER's Raider - nothing
+    // else is changed. counter_test_key = a Windows virtual-key number (119 = F8); 0 = off. Read from the bot
+    // update like the input trace, so it needs at least one bot in the match; only while the game is the window
+    // in front. Private testing in local matches only.
+    int g_CounterTestKey = 0;
+    volatile LONG64 g_LastCounterPoll = 0;
+    constexpr std::uintptr_t kCharReaction = 0x590;             // character -> reaction request object
+    constexpr std::uintptr_t kReactionRequest = 0x14;           // requested reaction number (0 = none)
+    constexpr std::uint32_t kReactionCounterAttack = 0x31;
+
+    void CounterTestTick()
+    {
+        const LONG64 now = static_cast<LONG64>(GetTickCount64());
+        const LONG64 last = g_LastCounterPoll;
+        if (now - last < 15 || InterlockedCompareExchange64(&g_LastCounterPoll, now, last) != last)
+            return;
+        static bool wasDown = false;
+        const bool down = (GetAsyncKeyState(g_CounterTestKey) & 0x8000) != 0;
+        if (!down || wasDown)
+        {
+            wasDown = down;
+            return;
+        }
+        wasDown = true;
+        DWORD frontProcess = 0;
+        GetWindowThreadProcessId(GetForegroundWindow(), &frontProcess);
+        if (frontProcess != GetCurrentProcessId())
+            return;                                            // the key was pressed in another program
+        const std::uintptr_t player = FindPlayer();
+        if (player == 0 || At<std::uintptr_t>(player) != g_Base + kRivalVftableRva)
+        {
+            Logger::Info("CounterTest: key pressed, but the player is not a Raider in a match - nothing done");
+            Logger::Flush();
+            return;
+        }
+        const std::uintptr_t reaction = At<std::uintptr_t>(player + kCharReaction);
+        if (reaction == 0)
+        {
+            Logger::Info("CounterTest: key pressed, but the Raider has no reaction object (+0x590) - nothing done");
+            Logger::Flush();
+            return;
+        }
+        const std::uint32_t before = At<std::uint32_t>(reaction + kReactionRequest);
+        At<std::uint32_t>(reaction + kReactionRequest) = kReactionCounterAttack;
+        Logger::Info("CounterTest: key pressed - requested reaction 0x31 (counter-attack) for the player's Raider, type " +
+            std::to_string(At<std::uint32_t>(player + 0x20C)) + " (the request was " + std::to_string(before) + ")");
+        Logger::Flush();
+    }
+
+    // Raider loadout test key (loadout_test_key, off by default; 2026-11-15). User: "do the step toward custom
+    // loadouts" -> "go ahead". Read from the exe (docs\prompt_log.md, "step G2"): a Raider's loadout is
+    // XG::Game::RivalBattleEquip (0x6F0 bytes): +8 Raider id, +0xC form entries [variant 0..1][form 0..4] of 0xB0
+    // bytes: +0x00 8 skill records {u32 skill id, u32 value, u8 flag} (4 actives, then 4 passives), +0x60 8 emotes,
+    // +0x80 button map 4 x {u32 skill id, u32 record index}, +0xA0 the 2 supers. The player's own list
+    // GameData::RivalEquipDataList = *( *( *(0x141782510) + 0x18 ) + 0x70 ), entries from +0x10 to +0x18 (0x6F0
+    // each). When a Raider is picked the own entry is copied into the per-player block (*(0x14177E470) + 0x38 +
+    // slot * 0xCD0, loadout at +0x5C8, Raider id at +0x5D0) and the skill set-up sub_1402F2040 fills button k from
+    // records[map[k].index]. The key SWAPS records 0 and 3 of one form (variant 0) - default Raider 400 (Vegeta),
+    // form 3 = Scouter <-> the skill of the 4th button - in the list entry and, if the player's block already holds
+    // that Raider, in the block too; the map's skill ids follow the records. Pressing again swaps back. It runs on
+    // its own thread so it also works in the lobby; that thread only reads and writes data (no game functions),
+    // inside a fault guard. In a match (bot update) the player's Raider skill table (ActiveSkillParam = character
+    // +0x2F8, +0xC: 5 forms x 4 buttons x 12 bytes) and its path flag (character +0x204: 1 = buttons from the
+    // loadout, 0 = from the tables) are logged whenever they change. Private testing in local matches only.
+    // Test 2 (same day): the swap only repeated what the game's own Raider Skills screen does (button order is kept
+    // by skill id), so the key now REPLACES one record's skill instead: loadout_test_skill (default 80330 = Ki
+    // Explode Blast) goes into record loadout_test_record (default 0 = the 1st button's record) of the form; the map
+    // entry pointing at that record takes the new id; pressing again puts the original skill back.
+    int g_LoadoutTestKey = 0;
+    std::uint32_t g_LoadoutTestRaider = 400;
+    std::uint32_t g_LoadoutTestForm = 3;
+    std::uint32_t g_LoadoutTestSkill = 80330;
+    std::uint32_t g_LoadoutTestRecord = 0;
+    std::uint32_t g_LoadoutOriginal = 0;                       // the skill that was replaced (for the way back)
+    constexpr std::uintptr_t kPlayDataGlobalRva = 0x1782510;   // pointer; +0x18 -> object; its +0x70 -> RivalEquipDataList
+    constexpr std::uintptr_t kEquipEntrySize = 0x6F0;
+    constexpr std::uintptr_t kEquipForms = 0xC;
+    constexpr std::uintptr_t kEquipFormSize = 0xB0;
+    constexpr std::uintptr_t kEquipButtonMap = 0x80;
+    constexpr std::uintptr_t kPlayerBlockFirst = 0x38;
+    constexpr std::uintptr_t kPlayerBlockSize = 0xCD0;
+    constexpr std::uintptr_t kPlayerBlockEquip = 0x5C8;
+    constexpr std::uintptr_t kCharPathFlag = 0x204;
+    constexpr std::uintptr_t kCharActiveSkills = 0x2F8;
+
+    struct LoadoutSwapResult
+    {
+        int list = 0;                 // 0 no list yet, 1 Raider not in the list, 2 swapped
+        std::uint32_t listBefore[4] = {};
+        std::uint32_t listAfter[4] = {};
+        int block = 0;                // 0 no game / block, 1 block holds another Raider, 2 swapped
+        std::uint32_t blockRaider = 0;
+        std::uint32_t blockBefore[4] = {};
+        std::uint32_t blockAfter[4] = {};
+        bool fault = false;
+    };
+
+    // What the 4 buttons of one form show: records[map[k].index].id (-1 when the index is not a record).
+    void ButtonView(std::uintptr_t form, std::uint32_t* out)
+    {
+        for (std::uintptr_t k = 0; k < 4; ++k)
+        {
+            const std::uint32_t index = At<std::uint32_t>(form + kEquipButtonMap + k * 8 + 4);
+            out[k] = index < 8 ? At<std::uint32_t>(form + index * 12) : 0xFFFFFFFFu;
+        }
+    }
+
+    void SwapFormRecords(std::uintptr_t equip, std::uint32_t formIndex, std::uint32_t* before, std::uint32_t* after)
+    {
+        const std::uintptr_t form = equip + kEquipForms + formIndex * kEquipFormSize;
+        ButtonView(form, before);
+        std::uint8_t temp[12];
+        std::memcpy(temp, reinterpret_cast<const void*>(form), 12);
+        std::memcpy(reinterpret_cast<void*>(form), reinterpret_cast<const void*>(form + 36), 12);
+        std::memcpy(reinterpret_cast<void*>(form + 36), temp, 12);
+        for (std::uintptr_t k = 0; k < 4; ++k)
+        {
+            const std::uint32_t index = At<std::uint32_t>(form + kEquipButtonMap + k * 8 + 4);
+            if (index < 8)
+                At<std::uint32_t>(form + kEquipButtonMap + k * 8) = At<std::uint32_t>(form + index * 12);
+        }
+        ButtonView(form, after);
+    }
+
+    void ReplaceFormRecord(std::uintptr_t equip, std::uint32_t formIndex, std::uint32_t* before, std::uint32_t* after)
+    {
+        const std::uintptr_t form = equip + kEquipForms + formIndex * kEquipFormSize;
+        ButtonView(form, before);
+        const std::uintptr_t record = form + g_LoadoutTestRecord * 12;
+        const std::uint32_t current = At<std::uint32_t>(record);
+        std::uint32_t next = g_LoadoutTestSkill;
+        if (current == g_LoadoutTestSkill)
+            next = g_LoadoutOriginal != 0 ? g_LoadoutOriginal : current;
+        else if (g_LoadoutOriginal == 0)
+            g_LoadoutOriginal = current;
+        At<std::uint32_t>(record) = next;
+        for (std::uintptr_t k = 0; k < 4; ++k)
+        {
+            if (At<std::uint32_t>(form + kEquipButtonMap + k * 8 + 4) == g_LoadoutTestRecord)
+                At<std::uint32_t>(form + kEquipButtonMap + k * 8) = next;
+        }
+        ButtonView(form, after);
+    }
+
+    // Plain data only (no C++ objects), so the fault guard can wrap it.
+    void LoadoutSwapRaw(LoadoutSwapResult& r)
+    {
+        __try
+        {
+            const std::uintptr_t playData = At<std::uintptr_t>(g_Base + kPlayDataGlobalRva);
+            const std::uintptr_t holder = playData != 0 ? At<std::uintptr_t>(playData + 0x18) : 0;
+            const std::uintptr_t list = holder != 0 ? At<std::uintptr_t>(holder + 0x70) : 0;
+            if (list != 0)
+            {
+                r.list = 1;
+                for (std::uintptr_t e = At<std::uintptr_t>(list + 0x10), end = At<std::uintptr_t>(list + 0x18);
+                     e != 0 && e < end; e += kEquipEntrySize)
+                {
+                    if (At<std::uint32_t>(e + 8) == g_LoadoutTestRaider)
+                    {
+                        ReplaceFormRecord(e, g_LoadoutTestForm, r.listBefore, r.listAfter);
+                        r.list = 2;
+                        break;
+                    }
+                }
+            }
+            const std::uintptr_t game = At<std::uintptr_t>(g_Base + kGameGlobalPtrRva);
+            if (game != 0)
+            {
+                const std::uint32_t slot = At<std::uint32_t>(game + kLocalPlayerSlot);
+                if (slot < 8)
+                {
+                    const std::uintptr_t equip = game + kPlayerBlockFirst + slot * kPlayerBlockSize + kPlayerBlockEquip;
+                    r.blockRaider = At<std::uint32_t>(equip + 8);
+                    r.block = 1;
+                    if (r.blockRaider == g_LoadoutTestRaider)
+                    {
+                        ReplaceFormRecord(equip, g_LoadoutTestForm, r.blockBefore, r.blockAfter);
+                        r.block = 2;
+                    }
+                }
+            }
+        }
+        __except (EXCEPTION_EXECUTE_HANDLER)
+        {
+            r.fault = true;
+        }
+    }
+
+    std::string Buttons(const std::uint32_t* ids)
+    {
+        std::string s;
+        for (int k = 0; k < 4; ++k)
+            s += (k ? ", " : "") + (ids[k] == 0xFFFFFFFFu ? std::string("none") : std::to_string(ids[k]));
+        return s;
+    }
+
+    DWORD WINAPI LoadoutTestThread(LPVOID)
+    {
+        bool wasDown = false;
+        for (;;)
+        {
+            Sleep(20);
+            const bool down = (GetAsyncKeyState(g_LoadoutTestKey) & 0x8000) != 0;
+            if (!down || wasDown)
+            {
+                wasDown = down;
+                continue;
+            }
+            wasDown = true;
+            DWORD frontProcess = 0;
+            GetWindowThreadProcessId(GetForegroundWindow(), &frontProcess);
+            if (frontProcess != GetCurrentProcessId())
+                continue;                                          // the key was pressed in another program
+            LoadoutSwapResult r;
+            LoadoutSwapRaw(r);
+            std::string line = "LoadoutTest: key pressed (Raider " + std::to_string(g_LoadoutTestRaider) + ", form " +
+                std::to_string(g_LoadoutTestForm) + ", record " + std::to_string(g_LoadoutTestRecord + 1) + " <-> skill " +
+                std::to_string(g_LoadoutTestSkill) + "). ";
+            if (r.fault)
+                line += "STOPPED by a memory fault - nothing more read. ";
+            if (r.list == 0)
+                line += "Saved list: not there yet. ";
+            else if (r.list == 1)
+                line += "Saved list: this Raider is not in it. ";
+            else
+                line += "Saved list buttons: " + Buttons(r.listBefore) + " -> " + Buttons(r.listAfter) + ". ";
+            if (r.block == 0)
+                line += "Match block: none.";
+            else if (r.block == 1)
+                line += "Match block: holds Raider " + std::to_string(r.blockRaider) + " - not changed.";
+            else
+                line += "Match block buttons: " + Buttons(r.blockBefore) + " -> " + Buttons(r.blockAfter) + ".";
+            Logger::Info(line);
+            Logger::Flush();
+        }
+    }
+
+    // In a match: the player's Raider skill table and path flag, logged when they change (bot update thread).
+    volatile LONG64 g_LastLoadoutTrace = 0;
+    void LoadoutTraceTick()
+    {
+        const LONG64 now = static_cast<LONG64>(GetTickCount64());
+        const LONG64 last = g_LastLoadoutTrace;
+        if (now - last < 1000 || InterlockedCompareExchange64(&g_LastLoadoutTrace, now, last) != last)
+            return;
+        const std::uintptr_t player = FindPlayer();
+        if (player == 0 || At<std::uintptr_t>(player) != g_Base + kRivalVftableRva)
+            return;
+        const std::uintptr_t skills = At<std::uintptr_t>(player + kCharActiveSkills);
+        std::ostringstream line;
+        line << "LoadoutTest: in match - Raider type " << At<std::uint32_t>(player + 0x20C) << ", path flag (+0x204) "
+             << At<std::uint32_t>(player + kCharPathFlag);
+        const std::uintptr_t form = At<std::uintptr_t>(player + 0x2E0);
+        if (form != 0)
+            line << ", level " << reinterpret_cast<RivalLevelFn>(g_Base + kRivalLevelRva)(form);
+        if (skills == 0)
+            line << ", no skill table";
+        else
+        {
+            line << ", skill table (form: 4 buttons)";
+            for (std::uintptr_t f = 0; f < 5; ++f)
+            {
+                line << (f ? " |" : "") << " " << f << ":";
+                for (std::uintptr_t k = 0; k < 4; ++k)
+                {
+                    const std::uint32_t id = At<std::uint32_t>(skills + 0xC + f * 0x30 + k * 0xC);
+                    line << (k ? "," : "") << (id == 0xFFFFFFFFu ? std::string("-") : std::to_string(id));
+                }
+            }
+        }
+        static std::string lastLine;
+        if (line.str() == lastLine)
+            return;
+        lastLine = line.str();
+        Logger::Info(lastLine);
+        Logger::Flush();
+    }
+
+    // Survivor bots revive downed teammates (survivor_bot_revive, on by default; 2026-11-13). User: "in order to do
+    // the 2nd finisher, i am required for survivors to revive one another when they are downed by the raider".
+    // Every 250 ms each survivor bot (not downed itself) looks for the nearest downed survivor (Mob, role 0, flag
+    // 0x20000000, not itself) within kReviveRange. Far away: it is sent there with the approach state 10001 (target
+    // handle at AI+0x184C), the way the follower bot follows the player. Close (kReviveReach) with an interaction
+    // offered (sub_140121600): it holds interact (input queue sub_14027B1B0(char+0x5B8, 2) on every update of its
+    // own brain), the same press the Raider bot uses for finishers. What the game offers (kind/sub-kind at
+    // +0x1A94/+0x1A98) is logged, since the revive interaction's numbers are not known yet. A body that offers
+    // nothing for 4 s while the bot stands next to it is skipped by that bot for 60 s.
+    // State is kept per bot slot (each bot's brain is updated by one thread at a time; no shared writes).
+    // Test 1 (2026-11-13 15:09): bots stood on the body with 1/21 offered and pressed interact, nothing happened.
+    // The player's revive (15:38, input_trace) = 1/21 in reach + bit 0x2 held every frame for ~8 s, i.e. the same
+    // input; the bots' own brain kept replacing what they did. Now the bot is given the game's own revive action:
+    // sub_1402BC6B0(brain, downed character) makes a SimpleAIActionOrientationInteract with kind 6 and the target
+    // handle at +0x17AC; its update (sub_1402BA1E0 case 6) presses interact (sub_1402B1B20) every update while the
+    // target still has the downed flag 0xA18 & 0x20000000, and reports done when it is gone.
+    constexpr std::uintptr_t kStartReviveRva = 0x2BC6B0;            // sub_1402BC6B0(SimpleAI*, target unit)
+    constexpr std::uintptr_t kOrientationInteractVftableRva = 0x11AD298;
+    using StartReviveFn = void(__fastcall*)(std::uintptr_t, std::uintptr_t);
+    bool g_SurvivorRevive = false;
+    bool g_ReviveTrace = false;                      // revive_trace=1 (hooks and extra values further below)
+    constexpr float kReviveRange = 150.0f;
+    constexpr float kReviveReach = 4.0f;
+    struct ReviveState
+    {
+        std::uintptr_t target = 0;
+        LONG64 lastCheck = 0;
+        LONG64 nothingSince = 0;
+        LONG64 lastStatus = 0;
+        LONG64 holdSince = 0;
+        bool holding = false;
+        std::string lastReach;
+        SkippedUnit skipped[4] = {};
+        std::uint32_t ringPos = 0xFFFFFFFF;           // bot's input ring read position (diagnostics)
+        LONG64 lastRingLog = 0;
+        std::map<std::uint32_t, int> ringCounts;
+    };
+    ReviveState g_Revive[kSlotCount];
+
+    // Test 2 (2026-11-13 16:02): the game's own revive action ran on three bots for 8-18 s (step 1, still pressing
+    // interact through sub_1402B1B20 = the same input queue bit 0x2 the player holds) and the teammate never got up.
+    // The player stood still while holding; the bots' brain keeps steering them every frame. Now, while a bot holds a
+    // revive, its brain update is skipped (it stands still) and the bot presses 0x2 itself every update, like the
+    // player. Diagnostics: once a second the input bits found in the bot's own input ring (character +0x5B8, entries
+    // at (i + 1) * 48, write position +0xC34) are logged, to compare with the player's successful revive (only 0x2).
+    // Safety: a revive held for 15 s without the teammate getting up is dropped and that body skipped for 60 s.
+    // 2026-11-16: the player's manual revive took 13.1 s and 13.2 s (log revive-compare-1), too close to 15 s -> 25 s.
+    constexpr LONG64 kReviveGiveUpMs = 25000;
+
+    // Revive trace 3 (2026-11-15): the character's state machine (character +0x598; built by sub_14012EE30 ->
+    // sub_140131E90): +0x80 Possible_current state id, +0xB0 Possible_current state object, +0xD8 + id*8 the
+    // state objects (StateInteract = id 12, vtable 0x14118FF38). Raw values, to compare bots with the player.
+    // Revive trace 4: the StateInteract object of each slot, caught by InteractActionDetour (the action's owner;
+    // owner +8 = character handle). Its fields while reviving: +0x48 Possible_current node, +0xD8 the target slot
+    // cached by the claim check class_141192758 (sub_1401819B0: asks sub_140263710 kind 2 once, -1 before),
+    // and the reviver's +0x1E60 (the target slot that check reads).
+    std::uintptr_t g_StateInteractOf[kSlotCount + 1] = {};
+
+    std::string StateInfo(std::uintptr_t c)
+    {
+        std::ostringstream s;
+        s << "target(+0x1E60) " << At<std::int32_t>(c + 0x1E60);
+        const std::uint32_t slot = At<std::uint32_t>(c + kCharSlot);
+        const std::uintptr_t si = slot < kSlotCount ? g_StateInteractOf[slot] : 0;
+        if (si != 0 && At<std::uintptr_t>(si) == g_Base + 0x118FF38 && CharacterAt(At<std::uint32_t>(si + 8)) == c)
+            s << " | StateInteract +10 0x" << std::hex << At<std::uint64_t>(si + 0x10) << std::dec << " +48 " << At<std::int32_t>(si + 0x48)
+              << " +4C " << At<std::int32_t>(si + 0x4C) << " +50 " << At<std::int32_t>(si + 0x50)
+              << " +D8 " << At<std::int32_t>(si + 0xD8) << " +DC " << At<std::int32_t>(si + 0xDC)
+              << " +E0 " << static_cast<int>(At<std::uint8_t>(si + 0xE0)) << " +E2 " << static_cast<int>(At<std::uint8_t>(si + 0xE2));
+        else
+            s << " | StateInteract not seen yet";
+        return s.str();
+    }
+
+    void ReviveHold(std::uintptr_t self, std::uint32_t slot)
+    {
+        ReviveState& st = g_Revive[slot];
+        const std::uintptr_t input = At<std::uintptr_t>(self + 0x5B8);
+        if (input == 0)
+            return;
+        reinterpret_cast<PressInputFn>(g_Base + kPressInputRva)(input, 2);
+        const std::uint32_t writePos = At<std::uint32_t>(input + 0xC34) & 0x3F;
+        if (st.ringPos > 0x3F)
+            st.ringPos = writePos;
+        while (st.ringPos != writePos)
+        {
+            ++st.ringCounts[At<std::uint32_t>(input + (st.ringPos + 1) * 48)];
+            st.ringPos = (st.ringPos + 1) & 0x3F;
+        }
+        const LONG64 now = static_cast<LONG64>(GetTickCount64());
+        if (now - st.lastRingLog >= 1000 && !st.ringCounts.empty())
+        {
+            st.lastRingLog = now;
+            std::ostringstream line;
+            line << "ReviveBot: slot " << slot << " holding, input ring:";
+            for (const auto& [bits, n] : st.ringCounts)
+                line << " 0x" << std::hex << bits << std::dec << "x" << n;
+            const std::uintptr_t inReach = reinterpret_cast<CharacterPtrFn>(g_Base + kInteractionSlotRva)(self);
+            line << " | in reach " << (inReach != 0 ? std::to_string(At<std::uint32_t>(self + 0x1A94)) + "/" +
+                                                       std::to_string(At<std::uint32_t>(self + 0x1A98)) : std::string("none"));
+            if (g_ReviveTrace)
+            {
+                // Revive trace 2 (2026-11-15): the game's own answers, read-only calls.
+                // sub_1402760B0 = Possible_IsInteractHeld(input): latest ring entry bit 0x2, blocked while input
+                // byte +0xC3C has bit 0x2 (for characters not in the AI table sub_140207320).
+                // sub_1402636B0 = Possible_IsReviveGranted(manager game+0x67E8, reviver slot, target slot).
+                using InputQueryFn = std::uint8_t(__fastcall*)(std::uintptr_t);
+                using GrantedFn = std::uint8_t(__fastcall*)(std::uintptr_t, std::uint32_t, std::uint32_t);
+                const std::uint8_t held = reinterpret_cast<InputQueryFn>(g_Base + 0x2760B0)(input);
+                const std::uint8_t aiTable = reinterpret_cast<InputQueryFn>(g_Base + 0x207320)(self);
+                const std::int32_t readPos = At<std::int32_t>(input + 0xC30);
+                const std::uint32_t entry = (readPos >= 0 && readPos < 64) ? At<std::uint32_t>(input + (readPos + 1) * 48) : 0;
+                line << " | held " << static_cast<int>(held) << " c3c 0x" << std::hex << static_cast<int>(At<std::uint8_t>(input + 0xC3C))
+                     << " entry 0x" << entry << std::dec << " aiTable " << static_cast<int>(aiTable)
+                     << " state 0x" << std::hex << At<std::uint32_t>(self + 0xA10) << std::dec << " | " << StateInfo(self);
+                const std::uintptr_t game = At<std::uintptr_t>(g_Base + kGameGlobalPtrRva);
+                const std::uintptr_t manager = game != 0 ? At<std::uintptr_t>(game + 0x67E8) : 0;
+                if (st.target != 0)
+                {
+                    const std::uint32_t targetSlot = At<std::uint32_t>(st.target + kCharSlot);
+                    line << " | target slot " << targetSlot << " revivedBy(+0x1E80) " << At<std::int32_t>(st.target + 0x1E80);
+                    if (manager != 0)
+                        line << " granted " << static_cast<int>(reinterpret_cast<GrantedFn>(g_Base + 0x2636B0)(manager, slot, targetSlot));
+                }
+            }
+            Logger::Info(line.str());
+            st.ringCounts.clear();
+        }
+    }
+
+    // Returns true while this bot is busy reviving (the follower logic then leaves it alone).
+    bool SurvivorReviveTick(std::uintptr_t ai, std::uintptr_t self, std::uint32_t slot)
+    {
+        ReviveState& st = g_Revive[slot];
+        if ((At<std::uint32_t>(self + kCharFlags) & 0x20000000) != 0 || At<std::uint32_t>(self + kCharRole) != 0)
+        {
+            st.target = 0;
+            st.holding = false;
+            return false;
+        }
+        const LONG64 now = static_cast<LONG64>(GetTickCount64());
+        if (now - st.lastCheck >= 250)
+        {
+            st.lastCheck = now;
+            const float* me = reinterpret_cast<const float*>(self + kCharPosition);
+            std::uintptr_t best = 0;
+            std::uint32_t bestHandle = 0;
+            float bestDistance = kReviveRange * kReviveRange;
+            for (std::uint32_t h = 1; h < kCharacterTableSize; ++h)
+            {
+                const std::uintptr_t unit = CharacterAt(h);
+                if (unit == 0 || unit == self || At<std::uintptr_t>(unit) != g_Base + kMobVftableRva ||
+                    At<std::uint32_t>(unit + kCharRole) != 0 || (At<std::uint32_t>(unit + kCharFlags) & 0x20000000) == 0)
+                    continue;
+                bool skipped = false;
+                for (const auto& s : st.skipped)
+                    skipped |= s.unit == unit && now < s.until;
+                if (skipped)
+                    continue;
+                const float* p = reinterpret_cast<const float*>(unit + kCharPosition);
+                const float dx = p[0] - me[0], dy = p[1] - me[1], dz = p[2] - me[2];
+                const float d = dx * dx + dy * dy + dz * dz;
+                if (d < bestDistance)
+                {
+                    bestDistance = d;
+                    best = unit;
+                    bestHandle = h;
+                }
+            }
+            if (best != st.target)
+            {
+                if (best != 0)
+                    Logger::Info("ReviveBot: slot " + std::to_string(slot) + " goes to downed survivor slot " +
+                                 std::to_string(At<std::uint32_t>(best + kCharSlot)) + " (" +
+                                 std::to_string(static_cast<int>(std::sqrt(bestDistance))) + " away)");
+                else if (st.target != 0)
+                    Logger::Info("ReviveBot: slot " + std::to_string(slot) + " has no downed teammate to revive");
+                st.target = best;
+                st.nothingSince = 0;
+                st.lastReach.clear();
+            }
+            st.holding = false;
+            if (best != 0)
+            {
+                const float distance = std::sqrt(bestDistance);
+                const std::uintptr_t inReach = reinterpret_cast<CharacterPtrFn>(g_Base + kInteractionSlotRva)(self);
+                const std::string reach = inReach != 0 ? std::to_string(At<std::uint32_t>(self + 0x1A94)) + "/" +
+                                                         std::to_string(At<std::uint32_t>(self + 0x1A98)) : std::string("none");
+                if (distance <= kReviveReach && reach != st.lastReach)
+                {
+                    st.lastReach = reach;
+                    Logger::Info("ReviveBot: slot " + std::to_string(slot) + " next to downed slot " +
+                                 std::to_string(At<std::uint32_t>(best + kCharSlot)) + " (" +
+                                 std::to_string(distance) + " away), in reach " + reach);
+                    Logger::Flush();
+                }
+                const std::uint32_t reachKind = inReach != 0 ? At<std::uint32_t>(self + 0x1A94) : 0xFFFFFFFF;
+                const std::uint32_t reachSub = inReach != 0 ? At<std::uint32_t>(self + 0x1A98) : 0xFFFFFFFF;
+                if (distance <= kReviveReach && inReach != 0 && reachKind == 1 && (reachSub == 21 || reachSub == 22))
+                {
+                    if (st.holdSince == 0)
+                        st.holdSince = now;
+                    st.holding = true;
+                    st.nothingSince = 0;
+                    if (now - st.holdSince >= kReviveGiveUpMs)
+                    {
+                        SkippedUnit* s = &st.skipped[0];
+                        for (auto& x : st.skipped)
+                            if (x.unit == best || now >= x.until) { s = &x; break; }
+                        s->unit = best;
+                        s->until = now + 60000;
+                        Logger::Info("ReviveBot: slot " + std::to_string(slot) +
+                                     " - revive held 25 s without success, body skipped for 60 s");
+                        st.holding = false;
+                        st.target = 0;
+                        return false;
+                    }
+                    const std::uintptr_t action = At<std::uintptr_t>(ai + 0x18);
+                    const bool already = action != 0 && At<std::uintptr_t>(action) == g_Base + kOrientationInteractVftableRva &&
+                                         At<std::uint32_t>(action + 0x1790) == 6 && At<std::uint32_t>(action + 0x17AC) == bestHandle;
+                    if (!already)
+                    {
+                        reinterpret_cast<StartReviveFn>(g_Base + kStartReviveRva)(ai, best);
+                        Logger::Info("ReviveBot: slot " + std::to_string(slot) + " starts the game's revive action on slot " +
+                                     std::to_string(At<std::uint32_t>(best + kCharSlot)));
+                    }
+                    else if (now - st.lastStatus >= 2000)
+                    {
+                        st.lastStatus = now;
+                        Logger::Info("ReviveBot: slot " + std::to_string(slot) + " reviving: step " +
+                                     std::to_string(At<std::uint32_t>(action + 0x1700)) + " result " +
+                                     std::to_string(At<std::int32_t>(action + 0x1704)) + " t " +
+                                     std::to_string(At<float>(action + 0x170C)));
+                    }
+                }
+                else if (distance <= kReviveReach && inReach != 0)
+                    st.nothingSince = 0;   // something else is offered (another body closer, an item): keep waiting
+                else if (distance <= kReviveReach)
+                {
+                    if (st.nothingSince == 0)
+                        st.nothingSince = now;
+                    else if (now - st.nothingSince >= 4000)
+                    {
+                        SkippedUnit* s = &st.skipped[0];
+                        for (auto& x : st.skipped)
+                            if (x.unit == best || now >= x.until) { s = &x; break; }
+                        s->unit = best;
+                        s->until = now + 60000;
+                        Logger::Info("ReviveBot: slot " + std::to_string(slot) +
+                                     " - this body offers nothing to revive for 4 s, skipped for 60 s");
+                        st.target = 0;
+                        return false;
+                    }
+                }
+                const std::uint32_t state = At<std::uint32_t>(ai + kAiState);
+                const std::int32_t next = At<std::int32_t>(ai + kAiNextState);
+                if (!st.holding && distance > 1.5f && state != kStateApproach && state != kStateDowned && next < 0)
+                {
+                    AssignHandle(ai + kAiFollowTarget, bestHandle);
+                    At<std::uint32_t>(ai + kAiNextState) = kStateApproach;
+                }
+            }
+            if (!st.holding)
+                st.holdSince = 0;                    // the 15 s limit counts one uninterrupted hold
+        }
+        return st.target != 0;
+    }
+
+    // Bot attack test (2026-11-15, survivor_bot_attack=1). Private testing in local matches only.
+    // The game's own battle AI (SimpleAIActionEpisodeBattleVsPlayer, sub_1402B8B00) locks on with
+    // sub_140214290(self, target) and picks a command: target 5 m or more away -> 1 (three times in four) or 2;
+    // nearer -> 0. sub_1402B1430 turns it into input bits pushed with sub_14027B1B0(character +0x5B8, bits):
+    // 0 -> 0x1 (only while character byte +0x435 is set; otherwise nothing), 1 -> 0x100, 2 -> 0x400.
+    // This test does the same for our survivor bots against the Raider (within 30 m: walk to it, lock on, press),
+    // and logs every 2 s which bits were pressed and byte +0x435, so we learn which press does what.
+    constexpr std::uintptr_t kLockOnRva = 0x214290;                 // sub_140214290(UnitCharacter*, target)
+    using LockOnFn = std::uint64_t(__fastcall*)(std::uintptr_t, std::uintptr_t);
+    bool g_BotAttack = false;
+    constexpr float kAttackEngageRange = 30.0f;
+    constexpr float kAttackNear = 5.0f;
+    struct AttackState
+    {
+        std::uintptr_t target = 0;
+        std::uint32_t targetHandle = 0;
+        float distance = 0.0f;
+        LONG64 lastCheck = 0;
+        LONG64 nextPress = 0;
+        LONG64 lastLog = 0;
+        std::uint32_t farCount = 0;
+        std::map<std::uint32_t, int> pressed;
+    };
+    AttackState g_Attack[kSlotCount];
+
+    // Returns true while this bot is attacking the Raider (the follower logic then leaves it alone).
+    bool SurvivorAttackTick(std::uintptr_t ai, std::uintptr_t self, std::uint32_t slot)
+    {
+        AttackState& st = g_Attack[slot];
+        if ((At<std::uint32_t>(self + kCharFlags) & 0x20000000) != 0 || At<std::uint32_t>(self + kCharRole) != 0)
+        {
+            st.target = 0;
+            return false;
+        }
+        const LONG64 now = static_cast<LONG64>(GetTickCount64());
+        const float* me = reinterpret_cast<const float*>(self + kCharPosition);
+        if (now - st.lastCheck >= 250)
+        {
+            st.lastCheck = now;
+            std::uintptr_t best = 0;
+            std::uint32_t bestHandle = 0;
+            float bestDistance = kAttackEngageRange * kAttackEngageRange;
+            for (std::uint32_t h = 1; h < kCharacterTableSize; ++h)
+            {
+                const std::uintptr_t unit = CharacterAt(h);
+                if (unit == 0 || unit == self || At<std::uintptr_t>(unit) != g_Base + kRivalVftableRva)
+                    continue;
+                const float* p = reinterpret_cast<const float*>(unit + kCharPosition);
+                const float dx = p[0] - me[0], dy = p[1] - me[1], dz = p[2] - me[2];
+                const float d = dx * dx + dy * dy + dz * dz;
+                if (d < bestDistance)
+                {
+                    bestDistance = d;
+                    best = unit;
+                    bestHandle = h;
+                }
+            }
+            if (best != st.target)
+            {
+                if (best != 0)
+                    Logger::Info("AttackBot: slot " + std::to_string(slot) + " attacks the Raider (" +
+                                 std::to_string(static_cast<int>(std::sqrt(bestDistance))) + " away)");
+                else
+                    Logger::Info("AttackBot: slot " + std::to_string(slot) + " - Raider out of range, stops attacking");
+                Logger::Flush();
+                st.target = best;
+            }
+            st.targetHandle = bestHandle;
+            st.distance = std::sqrt(bestDistance);
+            // User 2026-11-15: without Dragon Change a survivor's attack is the megaton punch and the Raider slaps
+            // them. So only a bot with byte +0x435 set (Possible_DragonChanged) walks up to the Raider.
+            if (best != 0 && At<std::uint8_t>(self + 0x435) != 0)
+            {
+                const std::uint32_t state = At<std::uint32_t>(ai + kAiState);
+                const std::int32_t next = At<std::int32_t>(ai + kAiNextState);
+                if (st.distance > 4.0f && state != kStateApproach && state != kStateDowned && next < 0)
+                {
+                    AssignHandle(ai + kAiFollowTarget, bestHandle);
+                    At<std::uint32_t>(ai + kAiNextState) = kStateApproach;
+                }
+            }
+        }
+        if (st.target == 0 || CharacterAt(st.targetHandle) != st.target)
+            return false;
+        const std::uintptr_t input = At<std::uintptr_t>(self + 0x5B8);
+        if (input == 0)
+            return true;
+        if (now >= st.nextPress)
+        {
+            reinterpret_cast<LockOnFn>(g_Base + kLockOnRva)(self, st.target);
+            const bool battleByte = At<std::uint8_t>(self + 0x435) != 0;
+            // Same rule as the game's AI: near and not Dragon Changed -> press nothing (no megaton punch).
+            std::uint32_t bits = 0;
+            if (st.distance < kAttackNear)
+                bits = battleByte ? 0x1 : 0;
+            else
+                bits = (++st.farCount % 4 == 0) ? 0x400 : 0x100;
+            if (bits != 0)
+            {
+                reinterpret_cast<PressInputFn>(g_Base + kPressInputRva)(input, bits);
+                ++st.pressed[bits];
+            }
+            else
+                ++st.pressed[0];
+            st.nextPress = now + (bits == 0x1 ? 300 : 900);
+        }
+        if (now - st.lastLog >= 2000 && !st.pressed.empty())
+        {
+            st.lastLog = now;
+            std::ostringstream line;
+            line << "AttackBot: slot " << slot << " " << static_cast<int>(st.distance) << " m from the Raider, byte+0x435="
+                 << static_cast<int>(At<std::uint8_t>(self + 0x435)) << ", pressed:";
+            for (const auto& [bits, n] : st.pressed)
+                line << " 0x" << std::hex << bits << std::dec << "x" << n;
+            Logger::Info(line.str());
+            Logger::Flush();
+            st.pressed.clear();
+        }
+        return true;
+    }
+
+    // Revive trace (2026-11-15, revive_trace=1). Private testing in local matches only. Pass-through hooks, no
+    // behavior change: they log (once a second per slot and step) how far each character gets in the revive chain.
+    //   1. sub_140174A90  StateInteract's interact action (class_141190378 slot 2); switch on the offered kind
+    //                     (+0x1A94), kind 1 for a survivor -> 2.
+    //   2. sub_1400B2450  Possible_StartReviveInteract(?, target slot, character, flag) -> builds the request -> 3.
+    //   3. sub_140702B80  Possible_InteractManager_Request(manager, flag, request {slot, kind, target, sub, ...})
+    //   4. sub_140701800  Possible_InteractManager_Order(manager, a, b, target, slot, flag) (PacketInteractOrder)
+    constexpr std::uintptr_t kInteractActionRva = 0x174A90;
+    constexpr std::uintptr_t kStartReviveRequestRva = 0xB2450;
+    constexpr std::uintptr_t kInteractRequestRva = 0x702B80;
+    constexpr std::uintptr_t kInteractOrderRva = 0x701800;
+    using InteractActionFn = std::uint64_t(__fastcall*)(std::uintptr_t);
+    using StartReviveRequestFn = void(__fastcall*)(std::uintptr_t, std::uint64_t, std::uintptr_t, std::uint8_t);
+    using InteractRequestFn = std::uint8_t(__fastcall*)(std::uintptr_t, std::uint8_t, std::uintptr_t);
+    using InteractOrderFn = std::uint8_t(__fastcall*)(std::uintptr_t, std::uint32_t, std::uint32_t, std::uint32_t,
+                                                      std::int32_t, std::uint8_t);
+    InteractActionFn g_OriginalInteractAction = nullptr;
+    StartReviveRequestFn g_OriginalStartReviveRequest = nullptr;
+    InteractRequestFn g_OriginalInteractRequest = nullptr;
+    InteractOrderFn g_OriginalInteractOrder = nullptr;
+    void* g_InteractActionTarget = nullptr;
+    void* g_StartReviveRequestTarget = nullptr;
+    void* g_InteractRequestTarget = nullptr;
+    void* g_InteractOrderTarget = nullptr;
+    LONG64 g_ReviveTraceLast[4][kSlotCount + 1] = {};
+
+    bool ReviveTraceDue(int step, std::uint32_t slot)
+    {
+        if (slot > kSlotCount)
+            slot = kSlotCount;
+        const LONG64 now = static_cast<LONG64>(GetTickCount64());
+        if (now - g_ReviveTraceLast[step][slot] < 1000)
+            return false;
+        g_ReviveTraceLast[step][slot] = now;
+        return true;
+    }
+
+    std::string TraceWho(std::uint32_t slot)
+    {
+        std::string who = "slot " + std::to_string(slot);
+        if (slot < kSlotCount && (g_BotSlotMask & (1u << slot)) != 0)
+            who += " (bot)";
+        return who;
+    }
+
+    std::uint64_t __fastcall InteractActionDetour(std::uintptr_t action)
+    {
+        const std::uintptr_t state = action != 0 ? At<std::uintptr_t>(action) : 0;
+        const std::uintptr_t c = state != 0 ? CharacterAt(At<std::uint32_t>(state + 8)) : 0;
+        if (IsCharacter(c))
+        {
+            const std::uint32_t slot = At<std::uint32_t>(c + kCharSlot);
+            if (slot < kSlotCount && At<std::uintptr_t>(state) == g_Base + 0x118FF38)
+                g_StateInteractOf[slot] = state;
+            if (ReviveTraceDue(0, slot))
+            {
+                Logger::Info("ReviveTrace 1: " + TraceWho(slot) + " in StateInteract, offered " +
+                             std::to_string(At<std::int32_t>(c + 0x1A94)) + "/" + std::to_string(At<std::int32_t>(c + 0x1A98)) +
+                             ", control " + std::to_string(At<std::uint32_t>(c + 0x1FC)) +
+                             ", role " + std::to_string(At<std::uint32_t>(c + kCharRole)));
+                Logger::Flush();
+            }
+        }
+        return g_OriginalInteractAction(action);
+    }
+
+    void __fastcall StartReviveRequestDetour(std::uintptr_t a1, std::uint64_t target, std::uintptr_t character, std::uint8_t flag)
+    {
+        if (IsCharacter(character))
+        {
+            const std::uint32_t slot = At<std::uint32_t>(character + kCharSlot);
+            if (ReviveTraceDue(1, slot))
+            {
+                Logger::Info("ReviveTrace 2: " + TraceWho(slot) + " builds a revive request for slot " +
+                             std::to_string(static_cast<std::uint32_t>(target)) + " (flag " + std::to_string(flag) + ")");
+                Logger::Flush();
+            }
+        }
+        g_OriginalStartReviveRequest(a1, target, character, flag);
+    }
+
+    std::uint8_t __fastcall InteractRequestDetour(std::uintptr_t manager, std::uint8_t flag, std::uintptr_t request)
+    {
+        const std::uint8_t result = g_OriginalInteractRequest(manager, flag, request);
+        if (request != 0)
+        {
+            const std::uint32_t slot = At<std::uint32_t>(request);
+            if (ReviveTraceDue(2, slot))
+            {
+                Logger::Info("ReviveTrace 3: " + TraceWho(slot) + " interact request kind " +
+                             std::to_string(At<std::int32_t>(request + 4)) + " target " + std::to_string(At<std::int32_t>(request + 8)) +
+                             " sub " + std::to_string(At<std::int32_t>(request + 0xC)) + " flag " + std::to_string(flag) +
+                             " -> manager answered " + std::to_string(result));
+                Logger::Flush();
+            }
+        }
+        return result;
+    }
+
+    std::uint8_t __fastcall InteractOrderDetour(std::uintptr_t manager, std::uint32_t a, std::uint32_t b, std::uint32_t target,
+                                                std::int32_t slot, std::uint8_t flag)
+    {
+        const std::uint8_t result = g_OriginalInteractOrder(manager, a, b, target, slot, flag);
+        if (ReviveTraceDue(3, a))
+        {
+            Logger::Info("ReviveTrace 4: interact order a=" + std::to_string(a) + " b=" + std::to_string(b) + " target " +
+                         std::to_string(target) + " slot " + std::to_string(slot) + " flag " + std::to_string(flag) +
+                         " -> " + std::to_string(result));
+            Logger::Flush();
+        }
+        return result;
+    }
+
+    // Revive comparison (2026-11-16, revive_trace=1, log only - no behavior change). From the decomp of 2026-11-16:
+    // the revive reservations ("exclusive revive" locks) sit behind the pointer at game +0x67E8 (read by the claim
+    // step sub_1401819B0): 8 requests of 0x28 bytes at +0x000 {u32 slot, s32 kind, stopwatch +8, bool pending +0x20}
+    // and 8 lock slots of 12 bytes at +0x140 {u8 state (1 = taken), s32 owner (reviver's slot), s32 kind}, one per
+    // player slot being revived. The claim step starts from the reviver's +0x1E60 (slot of the player it revives) and
+    // gives up when that names nobody, before it asks for a lock (kind 2); 2026-11-15 the bots always had -1 there.
+    // Every 250 ms the whole picture is built (all 8 slots: downed flag, +0x1E60 reviving, +0x1E80 revived by,
+    // offered kind/sub-kind; taken locks; pending requests). Logged at once when it changed ("CHANGE"), and every 2 s
+    // while someone is downed. Purpose: compare a MANUAL player revive (hold, no item) with the bots' attempts.
+    constexpr std::uintptr_t kReviveLocksPtr = 0x67E8;   // game + 0x67E8 -> revive lock manager
+    std::mutex g_ReviveCompareMutex;
+    std::string g_ReviveCompareLast;
+    volatile LONG64 g_ReviveCompareTick = 0;
+    LONG64 g_ReviveCompareFull = 0;
+
+    void ReviveCompareTick()
+    {
+        const LONG64 now = static_cast<LONG64>(GetTickCount64());
+        if (now - g_ReviveCompareTick < 250)
+            return;
+        std::unique_lock<std::mutex> guard(g_ReviveCompareMutex, std::try_to_lock);   // bot brains run on several threads
+        if (!guard.owns_lock() || now - g_ReviveCompareTick < 250)
+            return;
+        g_ReviveCompareTick = now;
+
+        const std::uintptr_t game = At<std::uintptr_t>(g_Base + kGameGlobalPtrRva);
+        if (game == 0 || At<std::uintptr_t>(game + kCharacterManager) == 0)
+            return;
+        const auto bySlot = reinterpret_cast<CharacterBySlotFn>(g_Base + kCharacterBySlotRva);
+        const std::uint32_t playerSlot = At<std::uint32_t>(game + kLocalPlayerSlot);
+
+        std::ostringstream chars;
+        bool anyDowned = false;
+        for (std::uint32_t s = 0; s < kSlotCount; ++s)
+        {
+            const std::uintptr_t c = bySlot(At<std::uintptr_t>(game + kCharacterManager), s);
+            if (!IsCharacter(c))
+                continue;
+            const bool downed = (At<std::uint32_t>(c + kCharFlags) & 0x20000000) != 0;
+            anyDowned = anyDowned || downed;
+            chars << " | " << s << (s == playerSlot ? "(you)" : ((g_BotSlotMask & (1u << s)) != 0 ? "(bot)" : ""))
+                  << (downed ? " DOWN" : "") << " reviving " << At<std::int32_t>(c + 0x1E60)
+                  << " revivedBy " << At<std::int32_t>(c + 0x1E80)
+                  << " offered " << At<std::int32_t>(c + 0x1A94) << "/" << At<std::int32_t>(c + 0x1A98);
+        }
+
+        std::ostringstream locks;
+        const std::uintptr_t manager = At<std::uintptr_t>(game + kReviveLocksPtr);
+        if (manager == 0)
+        {
+            locks << "lock manager: none";
+        }
+        else
+        {
+            locks << "locks:";
+            bool anyLock = false;
+            for (std::uint32_t s = 0; s < kSlotCount; ++s)
+            {
+                const std::uintptr_t e = manager + 0x140 + s * 12;
+                if (At<std::uint8_t>(e) != 0)
+                {
+                    locks << " [slot " << s << " state " << static_cast<int>(At<std::uint8_t>(e)) << " owner "
+                          << At<std::int32_t>(e + 4) << " kind " << At<std::int32_t>(e + 8) << "]";
+                    anyLock = true;
+                }
+            }
+            if (!anyLock)
+                locks << " all free";
+            locks << "; requests:";
+            bool anyRequest = false;
+            for (std::uint32_t w = 0; w < kSlotCount; ++w)
+            {
+                const std::uintptr_t r = manager + w * 0x28;
+                if (At<std::uint8_t>(r + 0x20) != 0)
+                {
+                    locks << " [" << w << " wants slot " << At<std::int32_t>(r) << " kind " << At<std::int32_t>(r + 4) << "]";
+                    anyRequest = true;
+                }
+            }
+            if (!anyRequest)
+                locks << " none";
+        }
+
+        const std::string state = locks.str() + chars.str();
+        const bool changed = state != g_ReviveCompareLast;
+        if (changed || (anyDowned && now - g_ReviveCompareFull >= 2000))
+        {
+            g_ReviveCompareFull = now;
+            g_ReviveCompareLast = state;
+            Logger::Info(std::string(changed ? "ReviveCompare CHANGE: " : "ReviveCompare: ") + state);
+            Logger::Flush();
+        }
+    }
+
     std::uint64_t __fastcall AiUpdateDetour(std::uintptr_t ai, float dt)
     {
         if (g_InputTrace)
             InputTraceTick();
+        if (g_ReviveTrace)
+            ReviveCompareTick();
+        if (g_ReviveTrace)
+        {
+            // the player's side, for comparison: once a second while the player is offered a revive (kind 1)
+            static LONG64 s_lastPlayerState = 0;
+            const LONG64 now = static_cast<LONG64>(GetTickCount64());
+            if (now - s_lastPlayerState >= 1000)
+            {
+                s_lastPlayerState = now;
+                const std::uintptr_t player = FindPlayer();
+                if (player != 0 && At<std::int32_t>(player + 0x1A94) == 1)
+                {
+                    const std::uintptr_t input = At<std::uintptr_t>(player + 0x5B8);
+                    std::string line = "ReviveTrace P: player slot " + std::to_string(At<std::uint32_t>(player + kCharSlot)) +
+                                       " offered 1/" + std::to_string(At<std::int32_t>(player + 0x1A98));
+                    if (input != 0)
+                    {
+                        const std::int32_t readPos = At<std::int32_t>(input + 0xC30);
+                        const std::uint32_t entry = (readPos >= 0 && readPos < 64) ? At<std::uint32_t>(input + (readPos + 1) * 48) : 0;
+                        std::ostringstream e;
+                        e << " entry 0x" << std::hex << entry << " c3c 0x" << static_cast<int>(At<std::uint8_t>(input + 0xC3C));
+                        line += e.str();
+                    }
+                    Logger::Info(line + " | " + StateInfo(player));
+                    Logger::Flush();
+                }
+            }
+        }
+        if (g_CounterTestKey != 0)
+            CounterTestTick();
+        if (g_LoadoutTestKey != 0)
+            LoadoutTraceTick();
         if (g_RaiderAbsorb)
         {
             RaiderAbsorbTick();
@@ -968,8 +1881,48 @@ namespace
             }
             if (g_Trace)
                 TraceBot(ai, self);
+            // Revive diagnostic (2026-11-15): character +0x1FC = who controls it. sub_140206DE0 = Possible_IsRemote
+            // (2 or 3) and sub_1402069C0 = Possible_IsControlledHere (0 or 1); the interact action
+            // (class_141190378 slot 2 = sub_140174A90) and the interact request (sub_1400B2450 -> sub_140702B80)
+            // do nothing for a "remote" character. Logged once per slot and match to see what our bots are.
+            static std::uintptr_t s_loggedControl[kSlotCount] = {};
+            if (slot < kSlotCount && s_loggedControl[slot] != self)
+            {
+                s_loggedControl[slot] = self;
+                std::string line = "PracticeBots: slot " + std::to_string(slot) + " control +0x1FC = " +
+                                   std::to_string(At<std::uint32_t>(self + 0x1FC)) + ", role " +
+                                   std::to_string(At<std::uint32_t>(self + kCharRole)) +
+                                   ((g_BotSlotMask & (1u << slot)) != 0 ? " (our bot)" : "");
+                const std::uintptr_t player = FindPlayer();
+                if (player != 0)
+                    line += " | player slot " + std::to_string(At<std::uint32_t>(player + kCharSlot)) +
+                            " control = " + std::to_string(At<std::uint32_t>(player + 0x1FC));
+                Logger::Info(line);
+                Logger::Flush();
+            }
         }
-        if (g_FollowerSlot < kSlotCount)
+        bool reviving = false;
+        if (g_SurvivorRevive && IsCharacter(self))
+        {
+            const std::uint32_t slot = At<std::uint32_t>(self + kCharSlot);
+            if (slot < kSlotCount && (g_BotSlotMask & (1u << slot)) != 0)
+            {
+                reviving = SurvivorReviveTick(ai, self, slot);
+                if (g_Revive[slot].holding)
+                {
+                    ReviveHold(self, slot);
+                    return 0;                        // brain paused: the bot stands still and holds interact
+                }
+            }
+        }
+        bool attacking = false;
+        if (g_BotAttack && !reviving && IsCharacter(self))
+        {
+            const std::uint32_t slot = At<std::uint32_t>(self + kCharSlot);
+            if (slot < kSlotCount && (g_BotSlotMask & (1u << slot)) != 0)
+                attacking = SurvivorAttackTick(ai, self, slot);
+        }
+        if (g_FollowerSlot < kSlotCount && !reviving && !attacking)
         {
             const std::uintptr_t bot = CharacterAt(At<std::uint32_t>(ai + kAiCharacterHandle));
             if (IsCharacter(bot) && At<std::uint32_t>(bot + kCharSlot) == g_FollowerSlot &&
@@ -1002,6 +1955,21 @@ namespace
         return g_OriginalTutorialGet(manager);
     }
 
+    // Bot slot OWNER (survivor_bot_owner, on by default; 2026-11-16). Found by comparing the player's manual revive
+    // with the bots' (log revive-compare-1) and reading the interact manager: a request's gauge (record +0x40 progress
+    // vs +0x48 required, record update sub_140701C50) only FINISHES when the requesting player is "controlled on this
+    // machine" (sub_1408BE6B0): control 0, or control 1 with the slot's owner (+0xD00) == the local player's slot.
+    // The game's own practice Raider bot gets its owner from sub_1408BF360: after sub_1408C0B70 it writes
+    // slot +0xD00 = sub_140C60F70() (the host's slot: the session's host when one exists, else the local slot at
+    // game +0x66B8). We only called sub_1408C0B70 for survivor bots, so their owner stayed -1 (the reset value,
+    // sub_14057B110) and nothing they started through the interact manager (revive; also boxes / civilians) could
+    // ever finish. Now the owner is written the same way the game does it.
+    constexpr std::uintptr_t kSlotOwner = 0xD00;               // slot +0xD00: owning player's slot (-1 none)
+    constexpr std::uintptr_t kHostSlotRva = 0xC60F70;          // sub_140C60F70() -> the host's player slot
+    constexpr std::uintptr_t kSessionLayerPtrRva = 0x17811F0;  // global that sub_140C60F70 reads first
+    using HostSlotFn = std::int32_t(__fastcall*)();
+    bool g_BotOwner = true;
+
     void AddSurvivorBot(std::uintptr_t slots, std::uint32_t index, int number)
     {
         const std::uintptr_t slot = slots + index * kSlotStride;
@@ -1013,6 +1981,19 @@ namespace
         At<std::uint32_t>(slot + kSlotControl) = 1;
         At<std::uint32_t>(slot + kSlotAiMode) = kAiModeOrientation;
         At<std::uint8_t>(slot + kSlotSkipAi) = 0;
+
+        const std::int32_t ownerBefore = At<std::int32_t>(slot + kSlotOwner);
+        if (g_BotOwner)
+        {
+            // same value the game gives its own Raider bot; without the session layer (never seen) use the local slot
+            const std::int32_t owner = At<std::uintptr_t>(g_Base + kSessionLayerPtrRva) != 0
+                ? reinterpret_cast<HostSlotFn>(g_Base + kHostSlotRva)()
+                : At<std::int32_t>(slots + kLocalPlayerSlot);
+            At<std::int32_t>(slot + kSlotOwner) = owner;
+        }
+        Logger::Info("PracticeBots: survivor bot slot " + std::to_string(index) + " owner (+0xD00) " +
+                     std::to_string(ownerBefore) + " -> " + std::to_string(At<std::int32_t>(slot + kSlotOwner)) +
+                     " (local player slot " + std::to_string(At<std::int32_t>(slots + kLocalPlayerSlot)) + ")");
 
         auto assign = reinterpret_cast<StringAssignFn>(g_Base + kStringAssignRva);
         const std::string name = "SURVIVOR BOT " + std::to_string(number);
@@ -1419,6 +2400,16 @@ bool PracticeBots::Init()
     g_FollowerBot = GetPrivateProfileIntA("steam", "survivor_bot_follow", 0, SteamConfig::GetPath().c_str());
     if (g_FollowerBot > 0)
         Logger::Info("PracticeBots: survivor bot " + std::to_string(g_FollowerBot) + " will follow the player");
+    g_BotOwner = GetPrivateProfileIntA("steam", "survivor_bot_owner", 1, SteamConfig::GetPath().c_str()) != 0;
+    Logger::Info(std::string("PracticeBots: survivor bots get the host as slot owner like the game's own Raider bot (survivor_bot_owner=") +
+                 (g_BotOwner ? "1)" : "0 - OFF)"));
+    g_SurvivorRevive = GetPrivateProfileIntA("steam", "survivor_bot_revive", 1, SteamConfig::GetPath().c_str()) != 0;
+    if (g_SurvivorRevive)
+        Logger::Info("PracticeBots: survivor bots revive downed teammates (survivor_bot_revive=1)");
+    g_BotAttack = GetPrivateProfileIntA("steam", "survivor_bot_attack", 0, SteamConfig::GetPath().c_str()) != 0;
+    if (g_BotAttack)
+        Logger::Info("PracticeBots: bot attack test on - survivor bots lock on to the Raider within 30 m and press "
+                     "attack (survivor_bot_attack=1)");
     for (std::size_t i = 0; i < g_BotLooks.size(); ++i)
     {
         char value[128] = {};
@@ -1484,12 +2475,55 @@ bool PracticeBots::Init()
     g_InputTrace = GetPrivateProfileIntA("steam", "input_trace", 0, SteamConfig::GetPath().c_str()) != 0;
     if (g_InputTrace)
         Logger::Info("PracticeBots: input trace on - the player's pressed input bits are logged once a second (input_trace)");
+    g_CounterTestKey = GetPrivateProfileIntA("steam", "counter_test_key", 0, SteamConfig::GetPath().c_str());
+    if (g_CounterTestKey < 1 || g_CounterTestKey > 254)
+        g_CounterTestKey = 0;
+    if (g_CounterTestKey != 0)
+        Logger::Info("PracticeBots: counter-attack test key on - virtual key " + std::to_string(g_CounterTestKey) +
+            " makes the player's Raider play its counter-attack (counter_test_key)");
+    g_LoadoutTestKey = GetPrivateProfileIntA("steam", "loadout_test_key", 0, SteamConfig::GetPath().c_str());
+    if (g_LoadoutTestKey < 1 || g_LoadoutTestKey > 254)
+        g_LoadoutTestKey = 0;
+    if (g_LoadoutTestKey != 0)
+    {
+        g_LoadoutTestRaider = static_cast<std::uint32_t>(
+            GetPrivateProfileIntA("steam", "loadout_test_raider", 400, SteamConfig::GetPath().c_str()));
+        const int form = GetPrivateProfileIntA("steam", "loadout_test_form", 3, SteamConfig::GetPath().c_str());
+        g_LoadoutTestForm = form >= 0 && form <= 4 ? static_cast<std::uint32_t>(form) : 3u;
+        g_LoadoutTestSkill = static_cast<std::uint32_t>(
+            GetPrivateProfileIntA("steam", "loadout_test_skill", 80330, SteamConfig::GetPath().c_str()));
+        const int record = GetPrivateProfileIntA("steam", "loadout_test_record", 0, SteamConfig::GetPath().c_str());
+        g_LoadoutTestRecord = record >= 0 && record <= 7 ? static_cast<std::uint32_t>(record) : 0u;
+        if (CreateThread(nullptr, 0, &LoadoutTestThread, nullptr, 0, nullptr) != nullptr)
+            Logger::Info("PracticeBots: loadout test key on - virtual key " + std::to_string(g_LoadoutTestKey) +
+                " puts skill " + std::to_string(g_LoadoutTestSkill) + " into record " + std::to_string(g_LoadoutTestRecord + 1) +
+                " of Raider " + std::to_string(g_LoadoutTestRaider) + " form " + std::to_string(g_LoadoutTestForm) +
+                " in the saved loadout and back (loadout_test_key)");
+        else
+            Logger::Error("PracticeBots: loadout test key - could not start its thread");
+    }
     if (g_Trace)
         Logger::Info("PracticeBots: bot status trace on (every 2 s per bot)");
 
     // Always on with bots: the update hook also takes the bots out of the tutorial mode.
     const bool follow = Hook(kAiUpdateRva, reinterpret_cast<void*>(&AiUpdateDetour),
             reinterpret_cast<void**>(&g_OriginalAiUpdate), &g_AiUpdateTarget, "0x1402BE6E0 (tutorial AI update, follower)");
+
+    g_ReviveTrace = GetPrivateProfileIntA("steam", "revive_trace", 0, SteamConfig::GetPath().c_str()) != 0;
+    if (g_ReviveTrace)
+    {
+        Logger::Info("PracticeBots: revive trace on - logs each step of the revive chain (revive_trace=1)");
+        Logger::Info("PracticeBots: revive comparison on (2026-11-16) - 'ReviveCompare' lines: locks at game+0x67E8, "
+                     "each slot's reviving (+0x1E60) / revivedBy (+0x1E80) / offered kind");
+        Hook(kInteractActionRva, reinterpret_cast<void*>(&InteractActionDetour),
+             reinterpret_cast<void**>(&g_OriginalInteractAction), &g_InteractActionTarget, "sub_140174A90 (StateInteract action)");
+        Hook(kStartReviveRequestRva, reinterpret_cast<void*>(&StartReviveRequestDetour),
+             reinterpret_cast<void**>(&g_OriginalStartReviveRequest), &g_StartReviveRequestTarget, "sub_1400B2450 (revive request)");
+        Hook(kInteractRequestRva, reinterpret_cast<void*>(&InteractRequestDetour),
+             reinterpret_cast<void**>(&g_OriginalInteractRequest), &g_InteractRequestTarget, "sub_140702B80 (interact manager request)");
+        Hook(kInteractOrderRva, reinterpret_cast<void*>(&InteractOrderDetour),
+             reinterpret_cast<void**>(&g_OriginalInteractOrder), &g_InteractOrderTarget, "sub_140701800 (interact manager order)");
+    }
 
     g_RaiderBot = GetPrivateProfileIntA("steam", "practice_raider_bot", 1, SteamConfig::GetPath().c_str()) != 0;
     bool raider = true;
@@ -1512,6 +2546,12 @@ void PracticeBots::Shutdown()
     if (g_AiUpdateTarget)
         HookManager::Disable(g_AiUpdateTarget);
     g_AiUpdateTarget = nullptr;
+    for (void** target : { &g_InteractActionTarget, &g_StartReviveRequestTarget, &g_InteractRequestTarget, &g_InteractOrderTarget })
+    {
+        if (*target)
+            HookManager::Disable(*target);
+        *target = nullptr;
+    }
     if (g_TutorialGetTarget)
         HookManager::Disable(g_TutorialGetTarget);
     if (g_IsMatchHostTarget)
