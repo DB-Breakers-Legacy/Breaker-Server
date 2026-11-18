@@ -17,6 +17,8 @@ builder.Services.AddOptions<BreakerOptions>()
     .PostConfigure(options =>
         options.StunPorts = options.StunPorts.Length == 0 ? [3478, 3479] : options.StunPorts.Distinct().ToArray())
     .Validate(HasValidDiarkisKeys, "Breaker Diarkis keys are optional, but if any is set all four must be hexadecimal strings with valid lengths.")
+    .Validate(options => System.Net.IPAddress.TryParse(options.BindAddress, out _),
+        "Breaker:BindAddress must be an IP address (127.0.0.1, this PC's Tailscale IP, or 0.0.0.0 for every interface).")
     .ValidateOnStart();
 builder.Services.AddDbContext<BreakerDbContext>(options =>
     options.UseSqlite(builder.Configuration.GetConnectionString("Breaker") ?? "Data Source=breaker.db"));

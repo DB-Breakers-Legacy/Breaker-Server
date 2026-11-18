@@ -1,6 +1,7 @@
 [steam]
 mode=offline
 persona=BreakersRevived
+; Every player needs a DIFFERENT steamid (two players with the same id collide in lobbies and P2P).
 steamid=76561199006065889
 
 ; Steam/LAN emulation
@@ -9,7 +10,24 @@ custom_port=47584
 lan_only=1
 embedded_master=1
 
+; Peer networking scope (lobby discovery + emulated Steam P2P), see docs/tailscale-matchmaking-plan.md
+;   bind_address       interface the DLL's UDP sockets listen on. 127.0.0.1 = this PC only.
+;                      Over Tailscale: this PC's Tailscale IP (tailscale ip -4). 0.0.0.0 = every interface (whole LAN).
+;   advertise_host     address put in lobby adverts; empty = bind_address
+;   discovery_targets  comma-separated IPv4 that get lobby adverts / first-contact packets.
+;                      Over Tailscale: the OTHER players' Tailscale IPs. Nothing is sent anywhere else.
+;   lan_broadcast      1 = also broadcast to 255.255.255.255 (everyone on your LAN). Off by default.
+;   allowed_networks   peers outside these are blocked (outbound) and ignored (inbound).
+;                      Loopback, custom_server and backend_host are always allowed.
+;                      Tailscale only: 127.0.0.0/8,100.64.0.0/10
+bind_address=127.0.0.1
+advertise_host=
+discovery_targets=127.0.0.1
+lan_broadcast=0
+allowed_networks=127.0.0.0/8,10.0.0.0/8,172.16.0.0/12,192.168.0.0/16,169.254.0.0/16,100.64.0.0/10
+
 ; Game-service backend emulation
+; Over Tailscale: the Tailscale IP of the PC running BreakerServer (the host uses its own Tailscale IP too).
 backend_host=127.0.0.1
 backend_port=5000
 redirect_public_hosts=1

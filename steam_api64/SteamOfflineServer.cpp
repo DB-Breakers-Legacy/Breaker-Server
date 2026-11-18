@@ -45,6 +45,10 @@ namespace
 
     std::map<uint64_t, PeerEndpoint> g_PeerEndpoints;
 
+    // Peer and lobby tables are filled from unauthenticated UDP; cap them so spoofed senders can't grow them forever.
+    constexpr size_t kMaxTrackedPeers = 256;
+    constexpr uint64_t kPeerFreshMs = 10000;
+
     uint64_t NowMs()
     {
         return static_cast<uint64_t>(GetTickCount64());
@@ -151,6 +155,13 @@ namespace
 
         if (endpoint.Port == 0)
             return;
+
+        if (g_PeerEndpoints.size() >= kMaxTrackedPeers && g_PeerEndpoints.find(steamID) == g_PeerEndpoints.end())
+        {
+            auto oldest = std::min_element(g_PeerEndpoints.begin(), g_PeerEndpoints.end(),
+                [](const auto& a, const auto& b) { return a.second.LastSeenMs < b.second.LastSeenMs; });
+            g_PeerEndpoints.erase(oldest);
+        }
 
         g_PeerEndpoints[steamID] = endpoint;
     }
@@ -475,7 +486,8 @@ namespace
         }
 
         BOOL enabled = TRUE;
-        setsockopt(g_Socket, SOL_SOCKET, SO_BROADCAST, reinterpret_cast<const char*>(&enabled), sizeof(enabled));
+        if (SteamConfig::Get().LanBroadcast)
+            setsockopt(g_Socket, SOL_SOCKET, SO_BROADCAST, reinterpret_cast<const char*>(&enabled), sizeof(enabled));
         setsockopt(g_Socket, SOL_SOCKET, SO_REUSEADDR, reinterpret_cast<const char*>(&enabled), sizeof(enabled));
 
         u_long nonBlocking = 1;
@@ -483,7 +495,9 @@ namespace
 
         sockaddr_in local{};
         local.sin_family = AF_INET;
-        local.sin_addr.s_addr = htonl(INADDR_ANY);
+        // bind_address (default 127.0.0.1): only this interface can reach the socket. If the address isn't
+        // up (e.g. Tailscale not connected) the bind fails and lobby/P2P stays off instead of opening wider.
+        local.sin_addr.s_addr = htonl(SteamConfig::BindIPv4());
         local.sin_port = htons(g_Port);
 
         if (bind(g_Socket, reinterpret_cast<sockaddr*>(&local), sizeof(local)) == SOCKET_ERROR)
@@ -507,8 +521,11 @@ namespace
         else
             g_BoundPort = g_Port;
 
+        char boundHost[INET_ADDRSTRLEN]{};
+        inet_ntop(AF_INET, &local.sin_addr, boundHost, sizeof(boundHost));
         Logger::Info(
-            "SteamOfflineServer: embedded LAN/master discovery listening on UDP " +
+            std::string("SteamOfflineServer: embedded LAN/master discovery listening on UDP ") +
+            boundHost + ":" +
             std::to_string(g_BoundPort) +
             " target=" +
             std::to_string(g_Port));
@@ -543,21 +560,47 @@ namespace
         if (inet_pton(AF_INET, target.c_str(), &address.sin_addr) != 1)
             return;
 
+        // Checked here as well as in the sendto hook: the hooks are installed last at start-up.
+        if (!SteamConfig::IsAllowedPeerIPv4(ntohl(address.sin_addr.s_addr)))
+        {
+            static std::set<std::string> s_Logged;
+            static std::mutex s_LoggedMutex;
+            std::lock_guard<std::mutex> lock(s_LoggedMutex);
+            if (s_Logged.size() < 64 && s_Logged.insert(target).second)
+                Logger::Info("SteamOfflineServer: not sending to " + target + " (outside allowed_networks)");
+            return;
+        }
+
         SendTo(address, message);
     }
 
+    // Sends to every configured discovery destination, each once: 255.255.255.255 only when lan_broadcast=1,
+    // then custom_server and each discovery_targets entry (default 127.0.0.1). No destination is hard-coded;
+    // the old 26.255.255.255 (Radmin VPN range, public address space without Radmin) is gone.
     void Broadcast(const std::string& message)
     {
-        sockaddr_in broadcast{};
-        broadcast.sin_family = AF_INET;
-        broadcast.sin_addr.s_addr = htonl(INADDR_BROADCAST);
-        broadcast.sin_port = htons(g_Port);
-        SendTo(broadcast, message);
-
         const SteamConfig::Config& config = SteamConfig::Get();
-        SendToHost(config.CustomServerHost, g_Port, message);
-        SendToHost("26.255.255.255", g_Port, message);
-        SendToHost("127.0.0.1", g_Port, message);
+
+        if (config.LanBroadcast)
+        {
+            sockaddr_in broadcast{};
+            broadcast.sin_family = AF_INET;
+            broadcast.sin_addr.s_addr = htonl(INADDR_BROADCAST);
+            broadcast.sin_port = htons(g_Port);
+            SendTo(broadcast, message);
+        }
+
+        std::set<std::string> sent;
+        auto sendOnce = [&](const std::string& host)
+        {
+            const std::string target = host == "localhost" ? "127.0.0.1" : host;
+            if (!target.empty() && sent.insert(target).second)
+                SendToHost(target, g_Port, message);
+        };
+
+        sendOnce(config.CustomServerHost);
+        for (const std::string& target : SteamConfig::GetDiscoveryTargets())
+            sendOnce(target);
     }
 
     void StoreRemoteLobby(const SteamOfflineServer::LobbyRecord& record, const sockaddr_in* from = nullptr)
@@ -569,6 +612,13 @@ namespace
 
         if (g_HasLocalLobby && record.LobbyID == g_LocalLobby.LobbyID)
             return;
+
+        if (g_RemoteLobbies.size() >= kMaxTrackedPeers && g_RemoteLobbies.find(record.LobbyID) == g_RemoteLobbies.end())
+        {
+            auto oldest = std::min_element(g_RemoteLobbies.begin(), g_RemoteLobbies.end(),
+                [](const auto& a, const auto& b) { return a.second.LastSeenMs < b.second.LastSeenMs; });
+            g_RemoteLobbies.erase(oldest);
+        }
 
         g_RemoteLobbies[record.LobbyID] = record;
 
@@ -732,6 +782,10 @@ namespace
 
             if (received <= 0)
                 break;
+
+            // Drop anything from outside allowed_networks (lobby/P2P packets are unauthenticated).
+            if (from.sin_family != AF_INET || !SteamConfig::IsAllowedPeerIPv4(ntohl(from.sin_addr.s_addr)))
+                continue;
 
             HandlePacket(buffer, received, from);
         }
@@ -928,13 +982,36 @@ namespace SteamOfflineServer
 
         const std::string packet = BuildP2PPacket(target, data, size, channel);
 
+        // Unicast to the peer when its endpoint is known and fresh. Only first contact, or a peer not heard
+        // from for kPeerFreshMs, also goes to the discovery destinations. (Before, every game packet was also
+        // sent to the LAN broadcast address and to 26.255.255.255.)
         std::string host;
         uint16_t port = 0;
+        bool fresh = false;
+        const uint64_t key = static_cast<uint64_t>(target);
 
-        if (target != 0 && GetBestEndpoint(static_cast<uint64_t>(target), host, port) && !host.empty())
+        if (key != 0)
+        {
+            std::lock_guard<std::mutex> lock(g_Mutex);
+            auto peerIt = g_PeerEndpoints.find(key);
+            if (peerIt != g_PeerEndpoints.end() && !peerIt->second.Host.empty() && peerIt->second.Port != 0)
+            {
+                host = peerIt->second.Host;
+                port = peerIt->second.Port;
+                fresh = NowMs() - peerIt->second.LastSeenMs < kPeerFreshMs;
+            }
+            else if (FindPeerEndpointUnlocked(key, host, port))
+            {
+                fresh = true;   // from a live lobby record (those expire after 15 s)
+            }
+        }
+
+        if (!host.empty())
             SendToHost(host, port ? port : ConfiguredPort(), packet);
 
-        Broadcast(packet);
+        if (!fresh)
+            Broadcast(packet);
+
         return true;
     }
 
@@ -1138,6 +1215,21 @@ namespace SteamOfflineServer
 
     std::string GetLocalAddress()
     {
+        // Never advertise an address the socket isn't bound to (the old code put the first LAN IP into
+        // every lobby advert, whatever the socket was reachable on).
+        const SteamConfig::Config& config = SteamConfig::Get();
+        if (!config.AdvertiseHost.empty())
+            return config.AdvertiseHost;
+
+        if (!SteamConfig::IsBindAny())
+        {
+            IN_ADDR bound{};
+            bound.s_addr = htonl(SteamConfig::BindIPv4());
+            char text[INET_ADDRSTRLEN]{};
+            inet_ntop(AF_INET, &bound, text, sizeof(text));
+            return text[0] ? text : "127.0.0.1";
+        }
+
         char hostname[256]{};
 
         if (gethostname(hostname, sizeof(hostname)) == 0)
