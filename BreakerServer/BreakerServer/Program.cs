@@ -22,15 +22,20 @@ builder.Services.AddSingleton<ResponseCatalog>();
 builder.Services.AddSingleton<StarterDataStore>();
 builder.Services.AddSingleton<SessionTokenService>();
 builder.Services.AddSingleton<SessionKeyRegistry>();
+builder.Services.AddSingleton<MatchmakingCoordinator>();
+builder.Services.AddSingleton<ConnectionRoomCoordinator>();
 builder.Services.AddSingleton<AuthSessionRegistry>();
 builder.Services.AddHostedService(services => new DiarkisUdpService(
     services.GetRequiredService<IOptions<BreakerOptions>>(),
-    services.GetRequiredService<ILogger<DiarkisUdpService>>()));
+    services.GetRequiredService<ILogger<DiarkisUdpService>>(),
+    sessionKeys: services.GetRequiredService<SessionKeyRegistry>(),
+    coordinator: services.GetRequiredService<MatchmakingCoordinator>()));
 builder.Services.AddHostedService(services => new DiarkisUdpService(
     services.GetRequiredService<IOptions<BreakerOptions>>(),
     services.GetRequiredService<ILogger<DiarkisUdpService>>(),
     sessionListener: true,
-    sessionKeys: services.GetRequiredService<SessionKeyRegistry>()));
+    sessionKeys: services.GetRequiredService<SessionKeyRegistry>(),
+    connectionRooms: services.GetRequiredService<ConnectionRoomCoordinator>()));
 builder.Services.AddHostedService<StunUdpService>();
 builder.Services.AddScoped<ApiResponseService>();
 builder.Services.AddScoped<AccountService>();

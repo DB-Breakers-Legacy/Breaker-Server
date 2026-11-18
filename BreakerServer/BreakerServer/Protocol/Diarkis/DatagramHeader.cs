@@ -1,5 +1,16 @@
 namespace BreakerServer.Protocol.Diarkis;
 
+public enum DiarkisDatagramType : byte
+{
+    Unreliable = 1,
+    Syn = 2,
+    Reliable = 3,
+    Ack = 4,
+    Retransmit = 5,
+    Eack = 6,
+    Fin = 7
+}
+
 public static class DatagramHeader
 {
     public const int Length = 4;

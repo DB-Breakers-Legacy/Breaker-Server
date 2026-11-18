@@ -97,6 +97,149 @@ public sealed class ApiIntegrationTests : IClassFixture<BreakerApiFactory>
                 .Value.Limits.MaxRequestBodySize);
 
     [Fact]
+    public async Task CapturedPrefixRouteMapsToExistingHandlers()
+    {
+        using var response = await Post(
+            "/dbtb-prd/LALALALALA/025348/api/news/get_2d_ui_news_list",
+            new object?[] { new Dictionary<string, object?>(), Array.Empty<object?>() });
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        Assert.NotNull(await ReadResponse(response));
+    }
+
+    [Fact]
+    public async Task QueueVersionAndSelectableStagesMatchCapturedResponses()
+    {
+        using var versionResponse = await Post(
+            "/dbtb-prd/LALALALALA/025348/api/adjustment_data_manage/get_version",
+            new object?[] { new Dictionary<string, object?>(), Array.Empty<object?>() });
+        var versionBody = ObjectTree.List(await ReadResponse(versionResponse));
+        Assert.Equal(2, ObjectTree.Int32(ObjectTree.List(versionBody[1])[1]));
+
+        using var stageResponse = await Post(
+            "/dbtb-prd/LALALALALA/025348/api/season/get_selectable_stage",
+            new object?[] { new Dictionary<string, object?>(), Array.Empty<object?>() });
+        var stageBody = ObjectTree.List(await ReadResponse(stageResponse));
+        var stages = ObjectTree.List(ObjectTree.List(stageBody[1])[1], 7);
+        var ids = stages.Select(row => ObjectTree.Text(ObjectTree.List(row, 2)[0])).ToArray();
+        Assert.Equal(["1000", "1100", "1110", "1200", "1300", "1400", "1500"], ids);
+    }
+
+    [Fact]
+    public async Task MatchingHandoutsIssueFreshRegisteredKeysInWireOrder()
+    {
+        var first = await ReadMatchingHandout();
+        var second = await ReadMatchingHandout();
+
+        Assert.NotEqual(first, second);
+        var registry = _factory.Services.GetRequiredService<BreakerServer.Services.SessionKeyRegistry>();
+        var sid = Convert.FromHexString(first[2]);
+        Assert.True(registry.TryResolve(sid, out var keys));
+        Assert.Equal(first[2], Convert.ToHexString(keys!.Sid).ToLowerInvariant());
+        Assert.Equal(first[3], Convert.ToHexString(keys.Key).ToLowerInvariant());
+        Assert.Equal(first[4], Convert.ToHexString(keys.Iv).ToLowerInvariant());
+        Assert.Equal(first[5], Convert.ToHexString(keys.Mac).ToLowerInvariant());
+    }
+
+    private async Task<string[]> ReadMatchingHandout()
+    {
+        using var response = await Post(
+            "/dbtb-prd/LALALALALA/025348/api/battle/get_diarkis_matching_server_info",
+            new object?[] { new Dictionary<string, object?>(), Array.Empty<object?>() });
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+
+        var body = ObjectTree.List(await ReadResponse(response));
+        var handout = ObjectTree.List(ObjectTree.List(body[1])[1], 6);
+        return handout.Select(ObjectTree.Text).ToArray();
+    }
+
+    [Fact]
+    public async Task ConnectionHandoutRequiresAssembledBattleBinding()
+    {
+        var coordinator = _factory.Services.GetRequiredService<BreakerServer.Services.MatchmakingCoordinator>();
+        for (var index = 1; index <= 8; index++)
+        {
+            var userId = index == 1 ? UserId.ToString() : $"10000000000000000{index}";
+            var created = coordinator.Handle(new BreakerServer.Protocol.Diarkis.CsmsPacket(
+                userId, 3, 12000, "025348", "{\"gameRule\":0}", false));
+            var roomId = System.Text.Json.JsonDocument.Parse(created[1].Data)
+                .RootElement.GetProperty("roomId").GetString()!;
+            coordinator.Handle(new BreakerServer.Protocol.Diarkis.CsmsPacket(
+                userId, 3, 12017, "025348",
+                System.Text.Json.JsonSerializer.Serialize(new { roomId }), false));
+        }
+
+        var token = await Authenticate(UserId, UserId);
+        using var response = await Post(
+            "/dbtb-prd/LALALALALA/025348/api/battle/get_connection_server_info",
+            AuthenticatedBody(token));
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        var body = ObjectTree.List(await ReadResponse(response));
+        var result = ObjectTree.List(body[1]);
+        Assert.Equal(0, ObjectTree.Int32(result[0]));
+        var handout = ObjectTree.List(result[1], 6);
+        Assert.True(ObjectTree.Int32(handout[1]) > 0);
+        Assert.Equal(32, ObjectTree.Text(handout[2]).Length);
+    }
+
+    [Fact]
+    public async Task QueueBattleResultAndRequeueUseSharedLifecycleState()
+    {
+        var token = await Authenticate(UserId, UserId);
+        var queueRoutes = new[]
+        {
+            "/battle/waittime_preview",
+            "/battle/pre_matching_connection",
+            "/adjustment_data_manage/get_version",
+            "/battle/save_matching_cache",
+            "/season/get_selectable_stage"
+        };
+        foreach (var route in queueRoutes)
+        {
+            using var response = await Post($"/dbtb-prd/LALALALALA/025348/api{route}", AuthenticatedBody(token));
+            Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        }
+
+        var coordinator = _factory.Services.GetRequiredService<BreakerServer.Services.MatchmakingCoordinator>();
+        for (var index = 1; index <= 8; index++)
+        {
+            var userId = index == 1 ? UserId.ToString() : $"10000000000000000{index}";
+            var created = coordinator.Handle(new BreakerServer.Protocol.Diarkis.CsmsPacket(
+                userId, 3, 12000, "025348", "{\"gameRule\":0}", false));
+            var roomId = System.Text.Json.JsonDocument.Parse(created[1].Data)
+                .RootElement.GetProperty("roomId").GetString()!;
+            coordinator.Handle(new BreakerServer.Protocol.Diarkis.CsmsPacket(
+                userId, 3, 12017, "025348",
+                System.Text.Json.JsonSerializer.Serialize(new { roomId }), false));
+        }
+
+        using var started = await Post(
+            "/dbtb-prd/LALALALALA/025348/api/battle/start",
+            new object?[]
+            {
+                new Dictionary<string, object?> { ["userId"] = token },
+                new object?[] { 0, new object?[] { "leader" } }
+            });
+        Assert.Equal(HttpStatusCode.OK, started.StatusCode);
+        var startedBody = ObjectTree.List(await ReadResponse(started));
+        Assert.StartsWith("leader_", ObjectTree.Text(ObjectTree.List(startedBody[1])[1]));
+
+        foreach (var route in new[] { "/battle/consume_priority_point", "/battle/get_battle_member_result_list" })
+        {
+            using var response = await Post($"/dbtb-prd/LALALALALA/025348/api{route}", AuthenticatedBody(token));
+            Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        }
+
+        using var result = await Post("/dbtb-prd/LALALALALA/025348/api/battle/result", AuthenticatedBody(token));
+        Assert.Equal(HttpStatusCode.OK, result.StatusCode);
+        Assert.Throws<InvalidDataException>(() => coordinator.GetConnectionBinding(UserId.ToString()));
+
+        var requeue = coordinator.Handle(new BreakerServer.Protocol.Diarkis.CsmsPacket(
+            UserId.ToString(), 3, 12000, "025348", "{\"gameRule\":0}", false));
+        Assert.Equal(13000U, requeue.Last().SubId);
+    }
+
+    [Fact]
     public async Task MessageInfoRequiresAuthenticationAndKnownMessage()
     {
         using var anonymous = await Post(
