@@ -16,6 +16,15 @@ public sealed class BreakerOptions
     // [3478, 3479, 3478, 3479]). Program.cs falls back to 3478/3479 when nothing is configured.
     public int[] StunPorts { get; set; } = [];
     public string UdpHost { get; set; } = "127.0.0.1";
+
+    // Interface the UDP services (Diarkis matching/session, STUN) listen on. Loopback by default: only this
+    // PC. For a Tailscale session set it to this PC's Tailscale IP (and UdpHost/StunHost/... to the same).
+    // "0.0.0.0" listens on every interface, the whole LAN included; the container image uses it because
+    // Docker publishes the ports on the host side.
+    public string BindAddress { get; set; } = "127.0.0.1";
+
+    public System.Net.IPAddress BindIPAddress =>
+        System.Net.IPAddress.TryParse(BindAddress, out var address) ? address : System.Net.IPAddress.Loopback;
     public int UdpPort { get; set; } = 7100;
     public int UdpSessionPort { get; set; } = 7099;
 

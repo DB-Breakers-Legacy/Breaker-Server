@@ -33,22 +33,16 @@ static std::unordered_map<uint32_t, std::string> g_RedirectedHosts;
 static std::set<std::string> g_LoggedRedirectHosts;
 static uint32_t g_BackendIPv4 = 0;
 
+// Allowed destinations come from steam_config.ini (allowed_networks; loopback, custom_server and backend_host
+// always). The old hard-coded list also allowed 25.0.0.0/8 and 26.0.0.0/8 (public space used by Hamachi /
+// Radmin VPN) and the LAN broadcast address unconditionally.
 static bool IsAllowedIPv4(uint32_t ip)
 {
-    const uint8_t a = static_cast<uint8_t>((ip >> 24) & 0xFF);
-    const uint8_t b = static_cast<uint8_t>((ip >> 16) & 0xFF);
-    const uint8_t d = static_cast<uint8_t>(ip & 0xFF);
+    if (ip == 0xFFFFFFFFu)
+        return SteamConfig::Get().LanBroadcast;
 
-    if (a == 10) return true;
-    if (a == 127) return true;
-    if (a == 172 && b >= 16 && b <= 31) return true;
-    if (a == 192 && b == 168) return true;
-    if (a == 169 && b == 254) return true;
-    if (a == 255 && b == 255 && ((ip >> 8) & 0xFF) == 255 && d == 255) return true;
-
-    if (a == 25) return true;
-    if (a == 26) return true;
-    if (a == 100 && b >= 64 && b <= 127) return true;
+    if (SteamConfig::IsAllowedPeerIPv4(ip))
+        return true;
 
     {
         std::lock_guard<std::mutex> lock(g_AllowedPublicMutex);
@@ -218,6 +212,17 @@ static bool ResolveBackendIPv4()
     g_BackendIPv4 = ntohl(addr->sin_addr.S_un.S_addr);
     ::freeaddrinfo(result);
     return true;
+}
+
+// Only names the owner configured (backend_host / custom_server, e.g. a Tailscale MagicDNS name) make their
+// resolved addresses allowed. Before, any allowed-looking name (single label, *.local, *.lan) did, so a
+// LAN DNS answer could open an arbitrary public IP.
+static bool IsConfiguredHostName(const std::string& host)
+{
+    const SteamConfig::Config& config = SteamConfig::Get();
+    const std::string lower = Lower(host);
+    return (!config.BackendHost.empty() && lower == Lower(config.BackendHost)) ||
+        (!config.CustomServerHost.empty() && lower == Lower(config.CustomServerHost));
 }
 
 static void RememberAllowedIPv4Results(PADDRINFOA result)
@@ -534,7 +539,7 @@ static int WSAAPI HookedGetAddrInfo(PCSTR pNodeName, PCSTR pServiceName, const A
         ? g_OriginalGetAddrInfo(pNodeName, pServiceName, pHints, ppResult)
         : EAI_FAIL;
 
-    if (result == 0 && ppResult && *ppResult)
+    if (result == 0 && ppResult && *ppResult && IsConfiguredHostName(host))
         RememberAllowedIPv4Results(*ppResult);
 
     return result;
@@ -580,7 +585,7 @@ static INT WSAAPI HookedGetAddrInfoW(PCWSTR pNodeName, PCWSTR pServiceName, cons
         ? g_OriginalGetAddrInfoW(pNodeName, pServiceName, pHints, ppResult)
         : EAI_FAIL;
 
-    if (result == 0 && ppResult && *ppResult)
+    if (result == 0 && ppResult && *ppResult && IsConfiguredHostName(host))
         RememberAllowedIPv4ResultsW(*ppResult);
 
     return result;

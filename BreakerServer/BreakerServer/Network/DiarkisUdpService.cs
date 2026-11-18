@@ -108,10 +108,10 @@ public sealed class DiarkisUdpService(
             return;
         }
 
-        using var udp = new UdpClient(new IPEndPoint(IPAddress.Any, _port));
+        using var udp = new UdpClient(new IPEndPoint(_options.BindIPAddress, _port));
         IgnoreConnectionResets(udp);
         _udp = udp;
-        logger.LogInformation("Diarkis {Listener} UDP service listening on port {Port}", _name, _port);
+        logger.LogInformation("Diarkis {Listener} UDP service listening on {Address}:{Port}", _name, _options.BindIPAddress, _port);
 
         var retransmit = RetransmitLoopAsync(udp, stoppingToken);
         while (!stoppingToken.IsCancellationRequested)
