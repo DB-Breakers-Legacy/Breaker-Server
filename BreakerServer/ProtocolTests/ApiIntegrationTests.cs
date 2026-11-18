@@ -275,6 +275,56 @@ public sealed class ApiIntegrationTests : IClassFixture<BreakerApiFactory>
         Assert.True(registry.TryGet(ObjectTree.Text(server[2]), out _));
     }
 
+    // Shop purchase (2026-11-13): the price (last number of the item entry) is taken from Zeni = status part 1 [2]
+    // and the Raider is added to rival/get_list; without enough Zeni nothing changes. Uses the first Raider in
+    // Assets/shop.json, whatever it is.
+    [Fact]
+    public async Task ShopPaymentTakesZeniAndAddsTheRaider()
+    {
+        const long buyer = 76561198000000006;
+        var token = await Authenticate(buyer, buyer);
+
+        using var info = await Post("/dbtb-prd/025348/api/shop/get_info_category",
+            new object?[] { new Dictionary<string, object?> { ["userId"] = token }, new object?[] { "en", 1, 500, 0 } });
+        var lineup = ObjectTree.List(ObjectTree.List(ObjectTree.List(await ReadResponse(info))[1])[5]);
+        var product = ObjectTree.List(lineup.First(p =>
+            ObjectTree.Text(ObjectTree.List(ObjectTree.List(ObjectTree.List(p)[13])[0])[1]) == "RivalID"));
+        var item = ObjectTree.List(ObjectTree.List(product[13])[0]);
+        var productId = ObjectTree.Int32(item[0]);
+        var raider = ObjectTree.Int32(item[2]);
+        var price = ObjectTree.Int64(item[3]);
+        Assert.Equal(2, ObjectTree.Int32(product[4])); // Zeni
+
+        object?[] Buy() => new object?[]
+        {
+            new Dictionary<string, object?> { ["userId"] = token }, new object?[] { 1, productId, 1, "" }
+        };
+
+        // A new player has 0 Zeni: refused, nothing added.
+        using (var refused = await Post("/dbtb-prd/025348/api/shop/payment", Buy()))
+            Assert.NotEqual(0, ObjectTree.Int32(ObjectTree.List(ObjectTree.List(await ReadResponse(refused))[1])[0]));
+
+        using (var scope = _factory.Services.CreateScope())
+        {
+            var accounts = scope.ServiceProvider.GetRequiredService<BreakerServer.Services.AccountService>();
+            var user = await accounts.GetAsync(buyer, CancellationToken.None);
+            var status = accounts.OwnStatus(user);
+            ObjectTree.List(status[1])[2] = price + 50;
+            await accounts.SaveStatusAsync(user, status, CancellationToken.None);
+        }
+
+        using (var bought = await Post("/dbtb-prd/025348/api/shop/payment", Buy()))
+            Assert.Equal(0, ObjectTree.Int32(ObjectTree.List(ObjectTree.List(await ReadResponse(bought))[1])[0]));
+
+        using var rivals = await Post("/dbtb-prd/025348/api/rival/get_list", AuthenticatedBody(token));
+        var owned = ObjectTree.List(ObjectTree.List(ObjectTree.List(await ReadResponse(rivals))[1])[1]);
+        Assert.Contains(owned, r => ObjectTree.Int32(ObjectTree.List(r)[0]) == raider);
+
+        using var statusReply = await Post("/dbtb-prd/025348/api/patroller/get_status", AuthenticatedBody(token));
+        var part1 = ObjectTree.List(ObjectTree.List(ObjectTree.List(await ReadResponse(statusReply))[1])[1]);
+        Assert.Equal(50, ObjectTree.Int64(part1[2]));
+    }
+
     private async Task<string> Authenticate(long numericId, long ticketUserId)
     {
         using var response = await Post("/025348/api/user/auth", AuthBody(numericId, ticketUserId));

@@ -18,6 +18,7 @@ public static class ApiEndpoints
         app.MapAuthEndpoints();
         app.MapNameValidationEndpoints();
         app.MapNewsEndpoints();
+        app.MapShopEndpoints();
         MapGame(app);
         return app;
     }
@@ -534,6 +535,12 @@ public static class ApiEndpoints
             var user = await accounts.GetAsync(identity.ResolveUserId(body), ct);
             return responses.Respond(new object?[] { 0, ObjectTree.List(accounts.Characters(user), 2)[1] });
         });
+
+        // Asked when the shop opens (2026-11-13; game error 11354141877067 while it was missing). Never captured from
+        // the official server. The game's reader (ServerApiResponseGetTransballReleaseDateList, sub_1407c7860)
+        // expects [status, [[number, "date text"], ...]] - Possible_ transformation-ball release dates per id.
+        // An empty list for now.
+        api.MapPost("/transball/get_all_chara", (ApiResponseService responses) => responses.Respond(new object?[] { 0, new List<object?>() }));
 
         // Tutorial ("orientation") battles 1-3. Start: args [stage] -> [0, "<userId>_<yyyyMMddHHmmss>"] (official
         // id format). Only reached when user/create_user_info's third value is 1; ours sends 0 (tutorial skipped).

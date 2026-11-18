@@ -1,0 +1,31 @@
+{
+  "_note": "Test shop round 2 (2026-11-13). Read on every shop request - edit and reopen the shop, no restart needed. Change 'updated' (to a later time) when the items change so the game re-downloads the category. Lineup entry = [type 1 single/2 bundle, product id, name, field3 (unknown, 0), CURRENCY, purchase limit (0 = none), field6, field7, field8, text9, text10, text11, field12, [[product id, item type, item id, PRICE]]]. CURRENCY codes (from the game's after-purchase code, sub_140A189E0): 1 = TP tokens, 2 = Zeni (status part 1 [2]), 3 = Possible_ TP medals (status part 1 [4]). PRICE = the last number of the item entry (ShopItem +0x18, shown on the tile). Item types: CostumeItemID, RivalID, StampID, EmotionID, ... (see SHOP_FORMAT_NOTES.md). Buying (shop/payment) takes the price from the player's saved status and adds the Raider (Assets/rival-templates.json) or costume.",
+  "categories": [
+    {
+      "id": 1,
+      "name": "Raiders",
+      "updated": "2026-11-13 06:00:00",
+      "extra": "",
+      "text2": "",
+      "lineup": [
+        [1, 4001, "Raider 400", 0, 2, 0, 0, 0, 0, "", "", "", 0, [[4001, "RivalID", 400, 100]]],
+        [1, 5001, "Raider 500", 0, 2, 0, 0, 0, 0, "", "", "", 0, [[5001, "RivalID", 500, 100]]],
+        [1, 6001, "Raider 600", 0, 2, 0, 0, 0, 0, "", "", "", 0, [[6001, "RivalID", 600, 100]]],
+        [1, 7001, "Raider 700", 0, 2, 0, 0, 0, 0, "", "", "", 0, [[7001, "RivalID", 700, 100]]]
+      ]
+    },
+    {
+      "id": 2,
+      "name": "Survivor skins",
+      "updated": "2026-11-13 06:00:00",
+      "extra": "",
+      "text2": "",
+      "lineup": [
+        [1, 11001, "Costume 1100", 0, 2, 0, 0, 0, 0, "", "", "", 0, [[11001, "CostumeItemID", 1100, 100]]],
+        [1, 11031, "Costume 1103", 0, 2, 0, 0, 0, 0, "", "", "", 0, [[11031, "CostumeItemID", 1103, 100]]],
+        [1, 11041, "Costume 1104", 0, 2, 0, 0, 0, 0, "", "", "", 0, [[11041, "CostumeItemID", 1104, 100]]],
+        [1, 12011, "Costume 1201", 0, 2, 0, 0, 0, 0, "", "", "", 0, [[12011, "CostumeItemID", 1201, 100]]]
+      ]
+    }
+  ]
+}

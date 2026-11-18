@@ -50,8 +50,26 @@ public sealed class AccountService(BreakerDbContext db, StarterDataStore starter
     public object? Items(PatrollerUser user) =>
         ObjectTree.FromJson(string.IsNullOrEmpty(user.ItemsJson) ? starter.ItemsJson : user.ItemsJson);
 
+    // This player's own patroller/get_status reply (a brand-new player: the starter status). Part 1 =
+    // [Possible_ level, Possible_ exp, zeni, Possible_ super warrior spirit, Possible_ TP medals]. Zeni = [2] is
+    // confirmed (2026-11-13): the shop's Zeni counter is the game's PatrollerData +0x10, read live = this value.
+    public List<object?> OwnStatus(PatrollerUser user) =>
+        ObjectTree.List(ObjectTree.FromJson(string.IsNullOrEmpty(user.StatusJson) ? starter.StatusJson : user.StatusJson), 5);
+
+    public async Task SaveStatusAsync(PatrollerUser user, object? data, CancellationToken ct)
+    {
+        user.StatusJson = ObjectTree.ToJson(data);
+        await db.SaveChangesAsync(ct);
+    }
+
+    public async Task SaveItemsAsync(PatrollerUser user, object? data, CancellationToken ct)
+    {
+        user.ItemsJson = ObjectTree.ToJson(data);
+        await db.SaveChangesAsync(ct);
+    }
+
     // patroller/get_status: the server-wide reply (season-pass reward table, banners, ranked period dates) with
-    // this player's own parts put in: 1 = Possible_ [level, exp, total exp, zeni, ?], 2 and 3 = Possible_ rank,
+    // this player's own parts put in: 1 = see OwnStatus, 2 and 3 = Possible_ rank,
     // season pass [3] level and [4] points, and each pass reward's claimed flag ([1] of the entry with the same
     // reward number [0]; rewards the player has no entry for are unclaimed).
     public object? Status(PatrollerUser user)
