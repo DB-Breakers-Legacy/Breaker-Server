@@ -231,7 +231,7 @@ public sealed class DiarkisUdpServiceTests
                 catch (OperationCanceledException) when (!_timeout.IsCancellationRequested)
                 {
                 }
-                catch (SocketException ex) when (ex.SocketErrorCode == SocketError.ConnectionReset)
+                catch (SocketException ex) when (ex.SocketErrorCode is SocketError.ConnectionReset or SocketError.ConnectionRefused)
                 {
                 }
             }
