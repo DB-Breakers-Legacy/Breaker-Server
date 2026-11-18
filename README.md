@@ -85,9 +85,11 @@ bot works. Logs: the server window, and `bin\BreakersRevived\Logs\BreakersRevive
 
 ### 5. Play with someone over Tailscale
 
-What works today: both players connect to one server, log in, reach the lobby and play practice. Matching
-**two real players into one match is not done yet**: that is milestone M2 in
-`docs/tailscale-matchmaking-plan.md`, which also has the full checklist.
+What works today: both players connect to one server, log in, reach the lobby and play practice. Casual
+matchmaking fills the room with bots by default, so each player gets their own match. Real-player
+matchmaking exists but **waits for 8 real players** before a match starts; turn it on before starting the
+server with `$env:Breaker__CasualMatchmaking = "players"` (default `bots`). Playing a match with just two
+real players is milestone M2 in `docs/tailscale-matchmaking-plan.md`, which also has the full checklist.
 
 1. Both PCs join the same tailnet. Each player runs `tailscale ip -4` and shares the `100.x` address.
 2. Firewall, recommended, in an elevated (Run as Administrator) PowerShell. Host:
@@ -152,8 +154,9 @@ emulation. It does not validate tickets with Steam.
   complete the full game-entry flow.
 - The client can currently progress through the server connection process and
   reach the tutorial flow.
-- Match/session behavior is still being implemented. Each player currently gets their own match room,
-  so two real players are never put in the same match (milestone M2 in `docs/tailscale-matchmaking-plan.md`).
+- Match/session behavior is still being implemented. `Breaker:CasualMatchmaking` = `bots` (default) gives
+  each player their own match with bots; `players` uses the real-player coordinator, which needs 8 players.
+  A two-player match is milestone M2 in `docs/tailscale-matchmaking-plan.md`.
 - `docs/running-the-server.txt` describes the original dev PC (its `D:\` paths); on other PCs use the
   steps above.
 - Some responses and game data are still placeholders while the remaining
