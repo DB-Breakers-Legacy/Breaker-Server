@@ -90,8 +90,10 @@ What works today: both players connect to one server, log in, reach the lobby an
 `docs/tailscale-matchmaking-plan.md`, which also has the full checklist.
 
 1. Both PCs join the same tailnet. Each player runs `tailscale ip -4` and shares the `100.x` address.
-2. Host, as admin, recommended: `run\Set-TailscaleFirewall.ps1 -Server -GameExe "<game exe>" -BlockGameOutbound`
-   from the breakers-sandbox tooling. The other player uses the same command without `-Server`.
+2. Firewall, recommended, in an elevated (Run as Administrator) PowerShell. Host:
+   `powershell -ExecutionPolicy Bypass -File scripts\set-tailscale-firewall.ps1 -Server -GameExe "<game folder>\bin\<game exe>" -BlockGameOutbound`.
+   The other player runs the same without `-Server`. It allows the server and game ports only from Tailscale
+   addresses, and blocks the game's traffic to anything outside the tailnet. `-Remove` deletes the rules.
 3. Host starts the server on its Tailscale address. It still listens on `127.0.0.1`, and never on `0.0.0.0`:
    ```powershell
    powershell -ExecutionPolicy Bypass -File scripts\start-breaker-server.ps1 -TailscaleIP <host 100.x>
