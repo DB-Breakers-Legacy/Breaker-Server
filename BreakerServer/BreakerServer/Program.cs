@@ -19,6 +19,8 @@ builder.Services.AddOptions<BreakerOptions>()
     .Validate(HasValidDiarkisKeys, "Breaker Diarkis keys are optional, but if any is set all four must be hexadecimal strings with valid lengths.")
     .Validate(options => System.Net.IPAddress.TryParse(options.BindAddress, out _),
         "Breaker:BindAddress must be an IP address (127.0.0.1, this PC's Tailscale IP, or 0.0.0.0 for every interface).")
+    .Validate(options => options.CasualMatchmaking.ToLowerInvariant() is "bots" or "players",
+        "Breaker:CasualMatchmaking must be \"bots\" or \"players\".")
     .ValidateOnStart();
 builder.Services.AddDbContext<BreakerDbContext>(options =>
     options.UseSqlite(builder.Configuration.GetConnectionString("Breaker") ?? "Data Source=breaker.db"));
@@ -26,6 +28,8 @@ builder.Services.AddSingleton<ResponseCatalog>();
 builder.Services.AddSingleton<StarterDataStore>();
 builder.Services.AddSingleton<SessionTokenService>();
 builder.Services.AddSingleton<SessionKeyRegistry>();
+builder.Services.AddSingleton<MatchmakingCoordinator>();
+builder.Services.AddSingleton<ConnectionRoomCoordinator>();
 builder.Services.AddSingleton<AuthSessionRegistry>();
 builder.Services.AddSingleton<AccountTokenService>();
 // Two listeners of the same class: AddHostedService would keep only the first registration
@@ -34,12 +38,14 @@ builder.Services.AddSingleton<IHostedService>(services => new DiarkisUdpService(
     services.GetRequiredService<IOptions<BreakerOptions>>(),
     services.GetRequiredService<ILogger<DiarkisUdpService>>(),
     sessionListener: false,
-    sessionKeys: services.GetRequiredService<SessionKeyRegistry>()));
+    sessionKeys: services.GetRequiredService<SessionKeyRegistry>(),
+    coordinator: services.GetRequiredService<MatchmakingCoordinator>()));
 builder.Services.AddSingleton<IHostedService>(services => new DiarkisUdpService(
     services.GetRequiredService<IOptions<BreakerOptions>>(),
     services.GetRequiredService<ILogger<DiarkisUdpService>>(),
     sessionListener: true,
-    sessionKeys: services.GetRequiredService<SessionKeyRegistry>()));
+    sessionKeys: services.GetRequiredService<SessionKeyRegistry>(),
+    connectionRooms: services.GetRequiredService<ConnectionRoomCoordinator>()));
 builder.Services.AddHostedService<StunUdpService>();
 builder.Services.AddScoped<ApiResponseService>();
 builder.Services.AddScoped<AccountService>();

@@ -19,13 +19,9 @@ public class BreakerApiFactory : WebApplicationFactory<Program>
     protected override void ConfigureWebHost(IWebHostBuilder builder)
     {
         builder.ConfigureAppConfiguration((_, configuration) =>
-            configuration.AddInMemoryCollection(new Dictionary<string, string?>
-            {
-                ["Breaker:DiarkisIvKey"] = string.Concat(Enumerable.Repeat("01", 16)),
-                ["Breaker:DiarkisAesKey"] = string.Concat(Enumerable.Repeat("02", 16)),
-                ["Breaker:DiarkisSidKey"] = string.Concat(Enumerable.Repeat("03", 16)),
-                ["Breaker:DiarkisHashKey"] = string.Concat(Enumerable.Repeat("04", 16))
-            }.Concat(ExtraSettings())));
+            // No Diarkis keys configured: fresh keys per session, as in production. Tests of the fixed-key
+            // development override add them through ExtraSettings.
+            configuration.AddInMemoryCollection(ExtraSettings()));
 
         builder.ConfigureLogging(logging => logging.ClearProviders());
 

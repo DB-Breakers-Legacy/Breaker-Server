@@ -1,11 +1,16 @@
-using System;
 using System.Buffers.Binary;
 using System.Security.Cryptography;
 
 namespace BreakerServer.Protocol.Diarkis;
 
 public sealed record DiarkisKeySet(byte[] Sid, byte[] Key, byte[] Iv, byte[] Mac);
-public sealed record SecureEnvelopeResult(int PlaintextLength, byte[]? Plaintext, bool HmacOk, bool PaddingOk, string Note);
+public sealed record SecureEnvelopeResult(
+    int PlaintextLength,
+    byte[]? Plaintext,
+    bool HmacOk,
+    bool PaddingOk,
+    string Note,
+    bool? SidOk = null);
 
 public static class SecureEnvelope
 {
@@ -33,8 +38,8 @@ public static class SecureEnvelope
             throw new InvalidOperationException($"Diarkis IV must be {BlockSize} bytes; got {keys.Iv.Length}.");
         if (keys.Mac.Length == 0)
             throw new InvalidOperationException("Diarkis HMAC key cannot be empty.");
-        if (keys.Sid.Length == 0)
-            throw new InvalidOperationException("Diarkis SID key cannot be empty.");
+        if (keys.Sid.Length != 16)
+            throw new InvalidOperationException("Diarkis SID must be 16 bytes.");
     }
 
     public static byte[] Encrypt(ReadOnlySpan<byte> plaintext, DiarkisKeySet keys)
@@ -70,22 +75,35 @@ public static class SecureEnvelope
         return output;
     }
 
-    public static SecureEnvelopeResult Decrypt(ReadOnlySpan<byte> input, DiarkisKeySet keys)
+    public static SecureEnvelopeResult Decrypt(
+        ReadOnlySpan<byte> input,
+        DiarkisKeySet keys,
+        bool fromClient = false)
     {
         Validate(keys);
 
+        bool? sidOk = null;
+        if (fromClient)
+        {
+            if (input.Length < keys.Sid.Length)
+                return new(0, null, false, false, "missing SID prefix", false);
+
+            sidOk = input[..keys.Sid.Length].SequenceEqual(keys.Sid);
+            input = input[keys.Sid.Length..];
+        }
+
         if (input.Length < HeaderSize + BlockSize)
-            return new(0, null, false, false, $"short envelope len={input.Length}");
+            return new(0, null, false, false, $"short envelope len={input.Length}", sidOk);
 
         var declaredLength = BinaryPrimitives.ReadUInt32BigEndian(input[..4]);
         if (declaredLength > int.MaxValue)
-            return new(0, null, false, false, "Invalid plaintext size.");
+            return new(0, null, false, false, "Invalid plaintext size.", sidOk);
+
         var plaintextLength = (int)declaredLength;
         var expectedMac = input.Slice(4, HmacSize);
         var ciphertext = input[HeaderSize..];
-
-        if (ciphertext.Length == 0 || ciphertext.Length % BlockSize != 0)
-            return new(plaintextLength, null, false, false, $"ciphertext len={ciphertext.Length} is not block aligned");
+        if (ciphertext.Length % BlockSize != 0)
+            return new(plaintextLength, null, false, false, $"ciphertext len={ciphertext.Length} is not block aligned", sidOk);
 
         byte[] actualMac;
         using (var hmac = new HMACSHA256(keys.Mac))
@@ -93,7 +111,7 @@ public static class SecureEnvelope
 
         var hmacOk = CryptographicOperations.FixedTimeEquals(expectedMac, actualMac);
         if (!hmacOk)
-            return new(plaintextLength, null, false, false, "HMAC-SHA256 mismatch");
+            return new(plaintextLength, null, false, false, "HMAC-SHA256 mismatch", sidOk);
 
         byte[] padded;
         try
@@ -109,26 +127,31 @@ public static class SecureEnvelope
         }
         catch (CryptographicException ex)
         {
-            return new(plaintextLength, null, true, false, ex.Message);
+            return new(plaintextLength, null, true, false, ex.Message, sidOk);
         }
 
-        if (padded.Length == 0)
-            return new(plaintextLength, null, true, false, "empty decrypted buffer");
+        if (plaintextLength > 0 && plaintextLength <= padded.Length &&
+            padded[plaintextLength..].IndexOfAnyExcept((byte)0) < 0)
+        {
+            return new(plaintextLength, padded[..plaintextLength], true, true, string.Empty, sidOk);
+        }
 
-        // The HMAC already proved the ciphertext is intact, so the length field is trusted.
-        // Zero length: the content runs to the last non-zero byte (seen in captures).
+        var contentLength = padded.Length;
+        while (contentLength > 0 && padded[contentLength - 1] == 0)
+            contentLength--;
+
         if (plaintextLength == 0)
         {
-            var end = padded.Length;
-            while (end > 0 && padded[end - 1] == 0) end--;
-            return new(0, padded[..end], true, true, end == 0 ? string.Empty : "zero length field, content trimmed");
+            var note = contentLength == 0 ? string.Empty : "plen0-nonzero-tail";
+            return new(contentLength, padded[..contentLength], true, contentLength != 0, note, sidOk);
         }
 
-        if (plaintextLength > padded.Length)
-            return new(plaintextLength, null, true, false, $"length field {plaintextLength} exceeds decrypted size {padded.Length}");
-
-        var tailIsZero = padded.AsSpan(plaintextLength).IndexOfAnyExcept((byte)0) < 0;
-        return new(plaintextLength, padded[..plaintextLength], true, tailIsZero,
-            tailIsZero ? string.Empty : "non-zero padding after the declared length");
+        return new(
+            plaintextLength,
+            padded[..contentLength],
+            true,
+            false,
+            $"pad-ext plen={plaintextLength} content={contentLength}",
+            sidOk);
     }
 }

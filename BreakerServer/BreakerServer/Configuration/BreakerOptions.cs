@@ -25,6 +25,13 @@ public sealed class BreakerOptions
 
     public System.Net.IPAddress BindIPAddress =>
         System.Net.IPAddress.TryParse(BindAddress, out var address) ? address : System.Net.IPAddress.Loopback;
+
+    // Casual matchmaking: "bots" (default) fills the room with bot members after a short search;
+    // "players" groups real players with MatchmakingCoordinator. Practice always uses bots.
+    public string CasualMatchmaking { get; set; } = "bots";
+
+    public bool RealPlayerMatchmaking =>
+        string.Equals(CasualMatchmaking, "players", StringComparison.OrdinalIgnoreCase);
     public int UdpPort { get; set; } = 7100;
     public int UdpSessionPort { get; set; } = 7099;
 

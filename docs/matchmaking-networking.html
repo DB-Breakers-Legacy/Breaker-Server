@@ -1,0 +1,426 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>DBTB Matchmaking and End-to-End Networking</title>
+  <style>
+    :root {
+      color-scheme: dark;
+      --bg: #0e1420;
+      --panel: #172235;
+      --panel-2: #111b2b;
+      --text: #e8eef8;
+      --muted: #a9b7ca;
+      --line: #34445c;
+      --blue: #78b7ff;
+      --green: #70d6a2;
+      --amber: #f0c66c;
+      --red: #f08b8b;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      background: var(--bg);
+      color: var(--text);
+      font: 16px/1.6 system-ui, -apple-system, "Segoe UI", sans-serif;
+    }
+    main { max-width: 1120px; margin: 0 auto; padding: 32px 20px 56px; }
+    h1, h2, h3 { line-height: 1.2; }
+    h1 { font-size: 2.25rem; margin-bottom: 8px; }
+    h2 { font-size: 1.55rem; margin-top: 36px; border-bottom: 1px solid var(--line); padding-bottom: 8px; }
+    h3 { font-size: 1.12rem; margin-top: 24px; color: var(--blue); }
+    p, li { color: var(--text); }
+    .muted, small { color: var(--muted); }
+    .lead { font-size: 1.1rem; color: var(--muted); max-width: 85ch; }
+    .panel {
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-radius: 10px;
+      padding: 18px 20px;
+      margin: 16px 0;
+    }
+    .panel h3:first-child { margin-top: 0; }
+    .warning { border-left: 4px solid var(--amber); }
+    .good { border-left: 4px solid var(--green); }
+    .open { border-left: 4px solid var(--red); }
+    .badge {
+      display: inline-block;
+      border: 1px solid var(--line);
+      border-radius: 999px;
+      padding: 2px 9px;
+      font-size: .76rem;
+      font-weight: 650;
+      white-space: nowrap;
+    }
+    .captured, .implemented { color: var(--green); }
+    .inferred, .provisional { color: var(--amber); }
+    .unknown { color: var(--red); }
+    .flow {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      gap: 8px;
+      margin: 16px 0;
+    }
+    .flow span {
+      background: var(--panel-2);
+      border: 1px solid var(--line);
+      border-radius: 6px;
+      padding: 7px 10px;
+    }
+    .flow b { color: var(--blue); font-weight: 500; }
+    .scroll { overflow-x: auto; }
+    table { width: 100%; border-collapse: collapse; margin: 12px 0; }
+    th, td { text-align: left; vertical-align: top; border-bottom: 1px solid var(--line); padding: 9px 10px; }
+    th { color: var(--blue); font-weight: 650; background: var(--panel-2); }
+    code, pre {
+      font-family: "Cascadia Mono", "Consolas", monospace;
+      color: #d6e6ff;
+    }
+    code { background: var(--panel-2); border-radius: 4px; padding: 1px 4px; }
+    pre {
+      background: #0a111d;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 14px;
+      overflow-x: auto;
+      font-size: .9rem;
+      line-height: 1.5;
+    }
+    a { color: var(--blue); }
+    .two-col { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; }
+    @media (max-width: 760px) {
+      main { padding: 20px 12px 36px; }
+      h1 { font-size: 1.8rem; }
+      .two-col { grid-template-columns: 1fr; }
+      th, td { padding: 7px; }
+    }
+  </style>
+</head>
+<body>
+<main>
+  <h1>Matchmaking and end-to-end networking</h1>
+  <p class="lead">
+    What is established about Dragon Ball: The Breakers networking, what the
+    current private server implements, and what must happen before the result can
+    be called compatible with the real client.
+  </p>
+  <p><small>Last updated: 2026-11-08 · <a href="https://github.com/DB-Breakers-Legacy/Breaker-Server/pull/6">PR #6</a></small></p>
+
+  <section class="panel warning">
+    <h3>Current position</h3>
+    <p>
+      The managed server now has synthetic implementations of transport, CSMS,
+      matchmaking, connection rooms, P2P relay, and battle lifecycle state. All
+      <strong>68 managed tests pass</strong>, and the Release build has zero
+      warnings. This is a strong research baseline, not a live-client success.
+    </p>
+    <p>
+      No patched native client has completed the full flow against this branch,
+      and no long multi-peer soak has been run. Native validation remains the
+      main outstanding milestone.
+    </p>
+  </section>
+
+  <h2>1. Evidence and confidence</h2>
+  <p>Claims are prioritized as follows:</p>
+  <ol>
+    <li><strong>Decrypted captures</strong> establish actual runtime wire behavior.</li>
+    <li><strong>Executable RTTI and code</strong> establish classes, serializers, constants, and parser metadata.</li>
+    <li><strong>Public Diarkis documentation</strong> supplies background only.</li>
+    <li><strong>Exploratory notes</strong> are leads, not proof.</li>
+  </ol>
+  <div class="two-col">
+    <section class="panel good">
+      <h3>High-confidence evidence</h3>
+      <ul>
+        <li>Offline TShark decoding with the supplied TLS keylog.</li>
+        <li>Fragment reassembly and authenticated UDP decryption.</li>
+        <li>RTTI-matched Ghidra analysis of the target executable.</li>
+        <li>Sanitized golden vectors and multi-client synthetic tests.</li>
+      </ul>
+    </section>
+    <section class="panel">
+      <h3>Analysed executable</h3>
+      <p><code>DRAGON BALL THE BREAKERS.exe</code></p>
+      <p><small>SHA-256</small><br><code>048796521daae21f12bbeb39c02fb4148049139aaf6141854921255064f7370c</code></p>
+      <p>Preferred image base: <code>0x140000000</code></p>
+    </section>
+  </div>
+  <p>
+    Account identifiers, session keys, real IP addresses, and captured payloads
+    are deliberately excluded from this document and from the implementation
+    repository.
+  </p>
+
+  <h2>2. End-to-end flow at a glance</h2>
+  <div class="flow">
+    <span>HTTP bootstrap/auth</span><b>→</b>
+    <span>Matching handout</span><b>→</b>
+    <span>Encrypted UDP</span><b>→</b>
+    <span>CSMS queue</span><b>→</b>
+    <span>8-player battle room</span><b>→</b>
+    <span>Connection handout</span><b>→</b>
+    <span>Connection room</span><b>→</b>
+    <span>P2P + relay</span><b>→</b>
+    <span>Results + requeue</span>
+  </div>
+  <p>
+    HTTPS provides identity, configuration, session handouts, and battle APIs.
+    Custom Diarkis UDP then carries matchmaking and session-room traffic. Bulk
+    gameplay state primarily moves directly between peers, with selected messages
+    relayed through the session host.
+  </p>
+
+  <h2>3. HTTP bootstrap and authentication</h2>
+  <ul>
+    <li>The client obtains environment and API base URLs, then authenticates and receives a rolling session token.</li>
+    <li>The captured API route is <code>/dbtb-prd/{prefix}/{title}/api</code>. The server also retains the shorter development route.</li>
+    <li>MessagePack is used for HTTP bodies even where the observed content type appears form-oriented.</li>
+    <li>Battle and queue APIs need to share per-user state rather than return unrelated global placeholders.</li>
+  </ul>
+
+  <h3>Queue and lifecycle calls</h3>
+  <p>The observed queue block includes:</p>
+  <pre>battle/waittime_preview
+battle/pre_matching_connection
+adjustment_data_manage/get_version
+battle/save_matching_cache
+season/get_selectable_stage</pre>
+  <ul>
+    <li><code>adjustment_data_manage/get_version</code> is confirmed as <code>[0, 2]</code>.</li>
+    <li><code>season/get_selectable_stage</code> returns seven ID/localized-name pairs with string IDs <code>1000</code>, <code>1100</code>, <code>1110</code>, <code>1200</code>, <code>1300</code>, <code>1400</code>, and <code>1500</code>.</li>
+    <li>Battle start creates per-user state. Result, member-result, and priority calls require it. Battle result clears it so the player can requeue.</li>
+  </ul>
+
+  <h2>4. Matching-server handout and key ownership</h2>
+  <p>
+    <code>battle/get_diarkis_matching_server_info</code> issues a fresh key set
+    for each UDP session. The managed server stores these in a shared registry so
+    HTTP and both UDP listeners resolve the same session.
+  </p>
+  <div class="scroll">
+    <table>
+      <thead><tr><th>Array position</th><th>Wire role</th></tr></thead>
+      <tbody>
+        <tr><td><code>[1][0]</code></td><td>Endpoint hostname</td></tr>
+        <tr><td><code>[1][1]</code></td><td>UDP port</td></tr>
+        <tr><td><code>[1][2]</code></td><td>16-byte session ID (SID)</td></tr>
+        <tr><td><code>[1][3]</code></td><td>AES-128-CBC key</td></tr>
+        <tr><td><code>[1][4]</code></td><td>Fixed 16-byte IV</td></tr>
+        <tr><td><code>[1][5]</code></td><td>HMAC-SHA256 key</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p>
+    Connection handouts use the same key layout without the matching-specific
+    tail. After match assembly, <code>battle/get_connection_server_info</code>
+    returns the binding for the authenticated user's battle, not unrelated global
+    state. A redirect preserves the SID and key set.
+  </p>
+
+  <h2>5. UDP transport and crypto</h2>
+  <h3>Datagram header and types</h3>
+  <p>Each datagram starts with a 3-byte little-endian sequence and a 1-byte type.</p>
+  <div class="scroll">
+    <table>
+      <thead><tr><th>Type</th><th>Role</th><th>Reliability</th></tr></thead>
+      <tbody>
+        <tr><td><code>1</code></td><td>Unreliable data</td><td>No ACK or retransmission</td></tr>
+        <tr><td><code>2</code></td><td>SYN</td><td>Opens a session using a 16-byte SID</td></tr>
+        <tr><td><code>3</code></td><td>Reliable DAT</td><td>ACKed; carries command envelopes</td></tr>
+        <tr><td><code>4</code></td><td>ACK</td><td>Server ACKs are bare 4 bytes; clients can batch 20-byte records</td></tr>
+        <tr><td><code>5</code></td><td>Retransmission</td><td>Repeats an unacked DAT every 0.5 seconds</td></tr>
+        <tr><td><code>6</code></td><td>EACK</td><td>Reserved; not observed</td></tr>
+        <tr><td><code>7</code></td><td>FIN</td><td>Teardown; response ACK uses the answerer's next DAT sequence</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <h3>Command envelope</h3>
+  <ul>
+    <li>Magic: <code>FE BE DE EF</code>.</li>
+    <li>Version: one byte; payload size: big-endian 24-bit; command: big-endian 16-bit.</li>
+    <li>Client header: 10 bytes. Server header: 11 bytes with a status byte.</li>
+    <li>Status <code>01</code> is success, <code>04</code> is an observed error, and <code>FF</code> is a push.</li>
+    <li>Large messages use <code>FF FE FD FC</code> fragmentation, with different client and server wrapping.</li>
+  </ul>
+
+  <h3>Secure envelope</h3>
+  <ul>
+    <li>Client payloads begin with the 16-byte cleartext SID; server payloads do not.</li>
+    <li>The envelope then contains a big-endian plaintext length, 32-byte HMAC-SHA256 over ciphertext only, and AES-CBC ciphertext.</li>
+    <li>Padding is zero-filled and always adds 1–16 bytes, including a full block when aligned.</li>
+    <li>The IV is fixed per session, not generated per packet.</li>
+    <li>HMAC validation comes before accepting plaintext. A zero declared length can hide meaningful content, and some senders under-report the length.</li>
+  </ul>
+
+  <h3>Bootstrap and maintenance</h3>
+  <ol>
+    <li>Client sends SYN; server returns ACK sequence zero.</li>
+    <li>Client init carries public and LAN addresses; server responds with its observed public address.</li>
+    <li>NAT and endpoint exchanges use commands <code>0x0131</code>, <code>0x012F</code>, and <code>0x0130</code>.</li>
+    <li>Heartbeat command <code>0x0001</code> echoes the counter and observed address roughly every five seconds.</li>
+    <li>The cleartext <code>0c0c</code> directory protocol is separate from RUDP and is not encrypted.</li>
+  </ol>
+
+  <h2>6. CSMS: the game-specific matchmaking layer</h2>
+  <p>
+    DBTB uses custom CSMS messages over commands <code>12000</code> and
+    <code>22000</code>. The public Diarkis ticket sequence is not a substitute.
+  </p>
+  <ul>
+    <li>The common header is 54 bytes with an 18-digit string UID.</li>
+    <li>Client requests include <code>title_cd</code>, <code>platform</code>, <code>user_id</code>, <code>id</code>, and <code>data</code>.</li>
+    <li><code>user_id</code> is a string. Request IDs use <code>CD</code>; response/push IDs use <code>D2</code>.</li>
+    <li><code>data</code> is a JSON string; fields such as <code>sdpData</code>, <code>roomData</code>, and <code>userData</code> are themselves JSON strings.</li>
+    <li>Responses use request sub-ID + 1000. Pushes add a big-endian total-length prefix.</li>
+  </ul>
+
+  <h3>Observed matchmaking sequence</h3>
+  <div class="scroll">
+    <table>
+      <thead><tr><th>Stage</th><th>Client request</th><th>Server response and pushes</th></tr></thead>
+      <tbody>
+        <tr><td>Create</td><td><code>12000</code> with profile, block list, and SDP</td><td><code>12120</code> room notice, then <code>13000</code> with room ID, room data, and room key</td></tr>
+        <tr><td>Search preferences</td><td><code>12012</code> with desired role and stage</td><td><code>12101</code> roster, then <code>13012</code></td></tr>
+        <tr><td>Member update</td><td><code>12005</code> with room ID and SDP</td><td><code>13005</code></td></tr>
+        <tr><td>Complete ticket</td><td><code>12017</code> with room ID</td><td><code>13017</code> with battle-room ID; battle roster and lifecycle pushes</td></tr>
+        <tr><td>Queue</td><td>Periodic <code>12002</code> keepalives</td><td>Heartbeat plus command <code>219</code> carrying <code>Timeout</code></td></tr>
+        <tr><td>Match found</td><td>Member updates continue</td><td><code>12105</code> roles, final <code>12102</code> rosters, then <code>12119</code> connection binding</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p>
+    Invite/rematch join uses <code>12001</code>. The reassembled invite at
+    <code>matchmaking data 3.pcapng</code> frame 1567851 confirms the field name
+    <code>isInvited</code>.
+  </p>
+
+  <h3>Current synthetic coordinator</h3>
+  <ul>
+    <li>Supports create, invite/rematch join, keepalive, member updates, preferences, and completion.</li>
+    <li>Assembles eight players, assigns one Raider and seven Survivors, and emits role and roster pushes.</li>
+    <li>Produces 64 targeted final-roster variants, including fragmented pushes.</li>
+    <li>Handles duplicate joins, timeout, disconnect, and requeue cleanup.</li>
+  </ul>
+
+  <h2>7. Connection-room handoff</h2>
+  <ol>
+    <li>The client requests connection-server information over HTTPS.</li>
+    <li>It opens the handed-out UDP session using the fresh SID and key set.</li>
+    <li>Depending on the handout, it may use a redirect probe, move directly to the real listener, or connect without redirect.</li>
+    <li>Connection-room requests use command <code>22000</code> with the same CSMS framing as matchmaking.</li>
+  </ol>
+  <div class="scroll">
+    <table>
+      <thead><tr><th>Operation</th><th>Request</th><th>Response/push</th></tr></thead>
+      <tbody>
+        <tr><td>Attach variants</td><td><code>22000</code>, <code>22001</code>, <code>22004</code></td><td><code>23000</code>, <code>23001</code>, <code>23004</code></td></tr>
+        <tr><td>Join response</td><td><code>22001</code></td><td><code>23001</code> includes a 52-character Diarkis room ID</td></tr>
+        <tr><td>Initial roster and identity</td><td>Attach</td><td><code>22100</code>, <code>22101</code>, <code>22104</code></td></tr>
+        <tr><td>Leave/report</td><td><code>22002</code></td><td><code>23002</code>; remaining members receive <code>22105</code></td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <h3>Room commands implemented synthetically</h3>
+  <ul>
+    <li><code>11</code>: member-list poll, including the duplicate-final-entry quirk and <code>Missing room ID</code> error behavior.</li>
+    <li><code>14</code>: member-joined or last-one-out notification.</li>
+    <li><code>101</code>: room create/join response with a 52-character room GUID.</li>
+    <li><code>102</code>: attach/detach and member-left messages.</li>
+    <li><code>103</code>: member-ID registration and distribution.</li>
+    <li><code>115</code>: identity/rule exchange returning <code>OK</code>.</li>
+  </ul>
+
+  <h2>8. P2P mesh and relay</h2>
+  <h3>Mesh setup</h3>
+  <ul>
+    <li>Command <code>127</code> distributes an opaque mesh blob followed by one record per player.</li>
+    <li>Each record contains the player ID and a base64 blob of length-prefixed public/LAN endpoint strings.</li>
+    <li>Command <code>301</code> reports a completed P2P connection. Its plaintext is empty; the observed zero block is padding.</li>
+  </ul>
+
+  <h3>Server-relayed traffic</h3>
+  <ul>
+    <li>Commands <code>19</code> and <code>24</code> carry player-state records. Relayed forms are 25 bytes.</li>
+    <li>Command <code>104</code> (<code>RoomMessage</code>) handles property synchronization and the in-match message channel.</li>
+    <li>The session host treats game payloads as opaque and relays only to validated members and recipients.</li>
+    <li>Reliable relay messages are retransmitted until ACKed; unreliable messages are not.</li>
+  </ul>
+
+  <h3>Direct peer traffic</h3>
+  <p>
+    Most gameplay state does not pass through the managed server. Direct P2P uses
+    cleartext UDP with the <code>0b0e0e0d</code> and <code>0d0e0a0f</code> magic
+    families, a 24-bit little-endian sequence, and a type byte. Setup, keepalive,
+    reliable game data, acknowledgement, and player-state records have been
+    identified. The server mainly needs mesh and relay compatibility, not a
+    game-state serializer.
+  </p>
+
+  <h2>9. What remains unknown or unproven</h2>
+  <section class="panel open">
+    <h3>Native interoperability</h3>
+    <p>
+      The patched real client has not completed login → queue → match → results
+      → requeue against this branch. Synthetic success must not be represented as
+      a live-client success.
+    </p>
+  </section>
+  <ul>
+    <li><strong>Field-level parser callbacks:</strong> constructor/callback analysis is still needed for full response and notification behavior. Vtable entries 1/2 return <code>13000</code> and <code>12105</code>; entry-3 functions are deleting destructors, not parsers.</li>
+    <li><strong>Long-run stability:</strong> repeated matches, disconnects, and requeues have not been soak-tested.</li>
+    <li><strong>Command <code>12116</code>:</strong> one observed occurrence; meaning remains open.</li>
+    <li><strong>Property-bag details:</strong> the first push's extra head/tail and some game-internal record semantics remain unresolved.</li>
+    <li><strong>Some native values:</strong> command 101's leading integer and P2P type 5's precise semantics are still inferred.</li>
+    <li><strong>Security and deployment:</strong> local placeholder authentication is not suitable for a public server, and native broadcast behavior requires an external firewall during testing.</li>
+  </ul>
+  <p>
+    These unknowns are deliberately separate from the confirmed wire formats. In
+    particular, the opaque game-state internals do not block the current relay
+    implementation unless the real client demonstrates a dependency.
+  </p>
+
+  <h2>10. Next steps</h2>
+  <ol>
+    <li>
+      <strong>Run an isolated native-client validation.</strong> Use a disposable
+      guest, dedicated account, loopback service/news URLs, and an external
+      firewall allowlist. Capture traffic before launch.
+    </li>
+    <li>
+      <strong>Compare the complete live sequence with the evidence.</strong> Check
+      login, queue, match assembly, connection handoff, P2P, results, and requeue.
+      Record failures by route, command, sub-ID, and frame.
+    </li>
+    <li>
+      <strong>Fix one evidenced incompatibility at a time.</strong> Add a focused
+      regression test and commit the fix with a short research-log update.
+    </li>
+    <li>
+      <strong>Finish targeted parser research as needed.</strong> Use constructors
+      and callbacks to answer concrete client failures rather than broadly
+      decompiling unrelated code.
+    </li>
+    <li>
+      <strong>Run a multi-peer soak.</strong> Repeat matches and requeues while
+      checking stale players, fragment growth, unacked state, retransmission,
+      and non-member isolation.
+    </li>
+  </ol>
+
+  <h2>11. References</h2>
+  <ul>
+    <li><a href="new-matchmaking-research.md">Active matchmaking research log</a></li>
+    <li><a href="next-steps-matchmakingV2.md">Matchmaking V2 next steps</a></li>
+    <li><a href="../../docs/DBTB-API-Documentation/md/Structure/Diarkis.md">Captured Diarkis structure</a></li>
+    <li><a href="../../docs/DBTB-API-Documentation/md/API/Calls/Matchmaking_Flow.md">Captured matchmaking flow</a></li>
+    <li><a href="header-research.md">Header and RTTI research</a></li>
+    <li><a href="new-review-netcode.md">Native networking and egress review</a></li>
+  </ul>
+</main>
+</body>
+</html>

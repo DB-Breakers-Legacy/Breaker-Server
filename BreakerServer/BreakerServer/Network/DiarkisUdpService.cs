@@ -23,16 +23,29 @@ namespace BreakerServer.Network;
 ///
 /// Keys: every session's key set is issued over HTTP and stored in <see cref="SessionKeyRegistry"/>; the
 /// client names its session by the 16-byte SID in clear text, and this service looks the keys up by it.
+///
+/// Casual matchmaking (12000 / 22000) has two modes, chosen by Breaker:CasualMatchmaking:
+///   "bots" (default): the room is filled with bot members after a short search (practice-room flow below).
+///   "players": real players are grouped by <see cref="MatchmakingCoordinator"/> and connected through
+///   <see cref="ConnectionRoomCoordinator"/> (CSMS framing, relay of room commands on the session listener).
+/// Practice (32000 / 42000) always uses the practice-room flow.
 /// </summary>
 public sealed class DiarkisUdpService(
     IOptions<BreakerOptions> options,
     ILogger<DiarkisUdpService> logger,
     bool sessionListener = false,
-    SessionKeyRegistry? sessionKeys = null) : BackgroundService
+    SessionKeyRegistry? sessionKeys = null,
+    TimeSpan? retransmitInterval = null,
+    MatchmakingCoordinator? coordinator = null,
+    ConnectionRoomCoordinator? connectionRooms = null) : BackgroundService
 {
     private const int SidLength = 16;
     private const int MaxSeenSequences = 4096;
-    private static readonly TimeSpan RetransmitInterval = TimeSpan.FromMilliseconds(500);
+    private const int MaxFragmentChunkBytes = 1200;
+    private const ushort CmdQueueKeepalive = 0x00DB;             // pushed every 5 s while queued for a real-player match
+    private static readonly TimeSpan QueueKeepaliveInterval = TimeSpan.FromSeconds(5);
+    private readonly TimeSpan _retransmitInterval = retransmitInterval ?? TimeSpan.FromMilliseconds(500);
+    private readonly bool _realPlayers = options.Value.RealPlayerMatchmaking;
     // The client goes quiet on the matching session during a match; a 7-minute Trial Match outlasted the old
     // 2-minute timeout, the session was dropped and the client could not leave the room afterwards
     // (stuck on "now loading", 2026-11-11).
@@ -88,6 +101,11 @@ public sealed class DiarkisUdpService(
         public bool CasualAutofillStarted;   // the 30 s autofill timer is running / has run for this room
         public string? ClientPublicAddress;
         public string? ClientLanAddress;
+        // Real-player matchmaking ("players" mode): identity from the CSMS frames, outgoing fragment counter.
+        public string? UserId;
+        public ushort Platform;
+        public ushort FragmentSequence;
+        public DateTimeOffset NextQueueKeepalive = DateTimeOffset.UtcNow;
     }
 
     private readonly BreakerOptions _options = options.Value;
@@ -160,22 +178,22 @@ public sealed class DiarkisUdpService(
         }
 
         var (sequence, type, payload) = DatagramHeader.Parse(data);
-        switch ((DiarkisPacketType)type)
+        switch ((DiarkisDatagramType)type)
         {
-            case DiarkisPacketType.Syn:
+            case DiarkisDatagramType.Syn:
                 await HandleSynAsync(udp, payload, remote, ct);
                 return;
-            case DiarkisPacketType.Fin:
+            case DiarkisDatagramType.Fin:
                 await HandleFinAsync(udp, payload, remote, ct);
                 return;
-            case DiarkisPacketType.Ack:
-            case DiarkisPacketType.Eack:
+            case DiarkisDatagramType.Ack:
+            case DiarkisDatagramType.Eack:
                 HandleAck(sequence, payload);
                 return;
-            case DiarkisPacketType.Udp:
-            case DiarkisPacketType.Dat:
-            case DiarkisPacketType.Resend:  // a client DAT we did not acknowledge in time
-                await HandleDatAsync(udp, sequence, (DiarkisPacketType)type, payload, remote, ct);
+            case DiarkisDatagramType.Unreliable:
+            case DiarkisDatagramType.Reliable:
+            case DiarkisDatagramType.Retransmit:  // a client DAT we did not acknowledge in time
+                await HandleDatAsync(udp, sequence, (DiarkisDatagramType)type, payload, remote, ct);
                 return;
             default:
                 LogUnclassified(remote, data, $"unknown packet type {type}");
@@ -231,6 +249,7 @@ public sealed class DiarkisUdpService(
                 return;
         }
 
+        coordinator?.RemoveSession(session.UserId);
         // Bare ACK carrying our next DAT sequence (captures: teardown).
         await SendAsync(udp, DiarkisPacketFactory.Ack(session.NextSequence), remote, ct);
         logger.LogInformation("Diarkis {Listener} session closed sid={Sid}", _name, sid);
@@ -267,7 +286,7 @@ public sealed class DiarkisUdpService(
     private async Task HandleDatAsync(
         UdpClient udp,
         int sequence,
-        DiarkisPacketType type,
+        DiarkisDatagramType type,
         byte[] payload,
         IPEndPoint remote,
         CancellationToken ct)
@@ -314,9 +333,19 @@ public sealed class DiarkisUdpService(
             byte[]? blob;
             lock (_gate)
                 blob = session.Fragments.Add(fragment);
-            if (blob is not null)
+            if (blob is null)
+                return;
+
+            // The reassembled bytes are either the secure blob (Python reference) or whole command envelopes
+            // (the matchmaking restoration's captures). An envelope starts with FE BE DE EF; as a blob length
+            // that would be ~4 GB, so the two cannot be confused.
+            if (!blob.AsSpan().StartsWith(CommandEnvelopeCodec.Magic))
+            {
                 await HandleSecureCommandAsync(udp, session, fragmentCommand, payload[4], blob, remote, ct);
-            return;
+                return;
+            }
+
+            payload = blob;
         }
 
         foreach (var envelope in CommandEnvelopeCodec.ParseAll(payload, fromClient: true))
@@ -348,6 +377,35 @@ public sealed class DiarkisUdpService(
         logger.LogInformation("Diarkis {Listener} cmd=0x{Command:X4} ver={Version} bytes={Length} sid={Sid}{Note}",
             _name, command, version, plaintext.Length, session.Sid,
             result.Note.Length == 0 ? string.Empty : $" note={result.Note}");
+
+        // "players" mode: casual matchmaking and its connection room go to the coordinators; room commands
+        // from a player they placed in a connection room are relayed there. Practice players are never in
+        // those rooms, so their room commands keep the practice handling below.
+        if (_realPlayers)
+        {
+            if (command == CmdCasualRoom && coordinator is not null)
+            {
+                await ProcessCsmsAsync(udp, session, command, plaintext, ct);
+                return;
+            }
+
+            if (command == CmdCasualConnection)
+            {
+                // Join/attach is handled by the connection-room coordinator (session listener); the session
+                // listener then redirects the client to the matching listener.
+                if (await ProcessCsmsAsync(udp, session, command, plaintext, ct) && sessionListener)
+                    await SendDatAsync(udp, session, CmdRedirect, 0, 0xFF,
+                        [.. RedirectMarker, .. Encoding.ASCII.GetBytes(MatchingAddress)], ct);
+                return;
+            }
+
+            if (sessionListener && connectionRooms?.IsRoomMember(session.UserId) == true &&
+                command is not (CmdInitOrHeartbeat or CmdUdpNotifyHolePunchDone or CmdUdpCheckNatType))
+            {
+                await HandleSessionRoomAsync(udp, session, command, version, plaintext, ct);
+                return;
+            }
+        }
 
         switch (command)
         {
@@ -912,6 +970,74 @@ public sealed class DiarkisUdpService(
         await SendAsync(udp, response, remote, ct);
     }
 
+    // --- real-player matchmaking ("players" mode), from the matchmaking restoration (PR #6) ---
+
+    private async Task<bool> ProcessCsmsAsync(UdpClient udp, Session session, ushort command, byte[] plaintext, CancellationToken ct)
+    {
+        try
+        {
+            var packet = CsmsCodec.Parse(plaintext, fromClient: true);
+            session.UserId = packet.UserId;
+            session.Platform = packet.Platform;
+            IReadOnlyList<OutgoingCsms>? messages = command switch
+            {
+                CmdCasualRoom when coordinator is not null => coordinator.Handle(packet),
+                CmdCasualConnection when connectionRooms is not null => connectionRooms.Handle(packet),
+                _ => null
+            };
+            if (command == CmdCasualConnection && connectionRooms is not null)
+                connectionRooms.SetEndpoints(packet.UserId, session.ClientPublicAddress, session.ClientLanAddress);
+
+            foreach (var message in messages ?? [])
+            {
+                var response = CsmsCodec.BuildResponse(
+                    message.TargetUserId, message.TargetPlatform, message.SubId, message.Data, push: message.Push);
+                foreach (var target in SessionsOf(message.TargetUserId))
+                {
+                    var envelope = DiarkisPacketFactory.BuildEnvelope(command, 1, message.Push ? (byte)0xFF : (byte)1, response, target.Keys);
+                    await SendBodyAsync(udp, target, envelope, ct);
+                }
+            }
+            return true;
+        }
+        catch (InvalidDataException ex)
+        {
+            logger.LogWarning(ex, "Diarkis {Listener} invalid CSMS cmd=0x{Command:X4} from {Remote}", _name, command, session.Remote);
+            return false;
+        }
+    }
+
+    private async Task HandleSessionRoomAsync(
+        UdpClient udp, Session session, ushort command, byte version, byte[] plaintext, CancellationToken ct)
+    {
+        try
+        {
+            // The coordinator reads the decrypted command body.
+            var request = new CommandEnvelope(version, command, null, plaintext.Length, plaintext, 0);
+            foreach (var message in connectionRooms!.HandleRoomCommand(session.UserId ?? string.Empty, request))
+            {
+                foreach (var target in SessionsOf(message.TargetUserId))
+                {
+                    var envelope = DiarkisPacketFactory.BuildEnvelope(message.Command, message.Version, message.Status, message.Plaintext, target.Keys);
+                    if (message.Reliable)
+                        await SendBodyAsync(udp, target, envelope, ct);
+                    else
+                        await SendEnvelopeAsync(udp, target, envelope, DiarkisDatagramType.Unreliable, ct);
+                }
+            }
+        }
+        catch (InvalidDataException ex)
+        {
+            logger.LogWarning(ex, "Diarkis {Listener} invalid session-room cmd={Command} from {Remote}", _name, command, session.Remote);
+        }
+    }
+
+    private Session[] SessionsOf(string userId)
+    {
+        lock (_gate)
+            return _sessions.Values.Where(x => x.UserId == userId).ToArray();
+    }
+
     // --- sending ---
 
     private Task SendDatAsync(
@@ -924,44 +1050,83 @@ public sealed class DiarkisUdpService(
         CancellationToken ct)
     {
         var envelope = DiarkisPacketFactory.BuildEnvelope(command, version, status, plaintext, session.Keys);
+        logger.LogInformation("Diarkis {Listener} TX cmd=0x{Command:X4} bytes={Length} sid={Sid}",
+            _name, command, plaintext.Length, session.Sid);
+        return SendEnvelopeAsync(udp, session, envelope, DiarkisDatagramType.Reliable, ct);
+    }
+
+    /// <summary>
+    /// Real-player path: a command envelope larger than one datagram chunk goes out as FF FE FD FC fragments,
+    /// each its own reliable DAT (captured server fragmentation).
+    /// </summary>
+    private async Task SendBodyAsync(UdpClient udp, Session session, byte[] envelope, CancellationToken ct)
+    {
+        if (envelope.Length <= MaxFragmentChunkBytes)
+        {
+            await SendEnvelopeAsync(udp, session, envelope, DiarkisDatagramType.Reliable, ct);
+            return;
+        }
+
+        ushort fragmentSequence;
+        lock (_gate)
+            fragmentSequence = session.FragmentSequence++;
+        foreach (var fragment in Fragmentation.Split(fragmentSequence, envelope, MaxFragmentChunkBytes))
+            await SendEnvelopeAsync(udp, session, fragment, DiarkisDatagramType.Reliable, ct);
+    }
+
+    private Task SendEnvelopeAsync(UdpClient udp, Session session, byte[] envelope, DiarkisDatagramType type, CancellationToken ct)
+    {
+        if (type == DiarkisDatagramType.Unreliable && envelope.Length > MaxFragmentChunkBytes)
+            throw new InvalidDataException("Unreliable Diarkis payload exceeds the datagram limit.");
+
         int sequence;
         IPEndPoint remote;
         lock (_gate)
         {
             sequence = session.NextSequence;
             session.NextSequence = (session.NextSequence + 1) & 0xFFFFFF;
-            session.Unacked[sequence] = envelope;
+            if (type == DiarkisDatagramType.Reliable)
+                session.Unacked[sequence] = envelope;
             remote = session.Remote;
         }
 
-        logger.LogInformation("Diarkis {Listener} TX cmd=0x{Command:X4} seq={Sequence} bytes={Length} sid={Sid}",
-            _name, command, sequence, plaintext.Length, session.Sid);
-        return SendAsync(udp, DiarkisPacketFactory.Combine(DatagramHeader.Pack(sequence, (byte)DiarkisPacketType.Dat), envelope), remote, ct);
+        return SendAsync(udp, DiarkisPacketFactory.Combine(DatagramHeader.Pack(sequence, (byte)type), envelope), remote, ct);
     }
 
     private async Task RetransmitLoopAsync(UdpClient udp, CancellationToken ct)
     {
         // Unacknowledged DATs are resent as type 5 with the same sequence and body every 0.5 s,
         // no backoff (captures: teardown). Idle sessions are dropped.
-        using var timer = new PeriodicTimer(RetransmitInterval);
+        using var timer = new PeriodicTimer(_retransmitInterval);
         while (await timer.WaitForNextTickAsync(ct))
         {
             List<(byte[] Packet, IPEndPoint Remote)> resend = [];
+            List<Session> keepalive = [];
             lock (_gate)
             {
                 var now = DateTimeOffset.UtcNow;
+                coordinator?.Expire(now);
                 foreach (var (sid, session) in _sessions.ToArray())
                 {
                     if (now - session.LastSeen > IdleTimeout)
                     {
                         _sessions.Remove(sid);
+                        coordinator?.RemoveSession(session.UserId);
                         logger.LogInformation("Diarkis {Listener} session timed out sid={Sid}", _name, sid);
                         continue;
                     }
 
+                    // While a player waits in the real-player queue, the server pushes "Timeout" every 5 s
+                    // (captured queue keepalive).
+                    if (!sessionListener && coordinator?.IsQueued(session.UserId) == true && now >= session.NextQueueKeepalive)
+                    {
+                        session.NextQueueKeepalive = now + QueueKeepaliveInterval;
+                        keepalive.Add(session);
+                    }
+
                     foreach (var (sequence, envelope) in session.Unacked)
                     {
-                        resend.Add((DiarkisPacketFactory.Combine(DatagramHeader.Pack(sequence, (byte)DiarkisPacketType.Resend), envelope), session.Remote));
+                        resend.Add((DiarkisPacketFactory.Combine(DatagramHeader.Pack(sequence, (byte)DiarkisDatagramType.Retransmit), envelope), session.Remote));
                         var count = session.ResendCounts.TryGetValue(sequence, out var c) ? c + 1 : 1;
                         session.ResendCounts[sequence] = count;
                         if (count <= 3 || count % 20 == 0)
@@ -975,6 +1140,12 @@ public sealed class DiarkisUdpService(
             {
                 try { await SendAsync(udp, packet, remote, ct); }
                 catch (SocketException ex) { logger.LogDebug(ex, "Resend to {Remote} failed", remote); }
+            }
+
+            foreach (var session in keepalive)
+            {
+                try { await SendDatAsync(udp, session, CmdQueueKeepalive, 1, 0xFF, Encoding.ASCII.GetBytes("Timeout"), ct); }
+                catch (SocketException ex) { logger.LogDebug(ex, "Queue keepalive to {Remote} failed", session.Remote); }
             }
         }
     }

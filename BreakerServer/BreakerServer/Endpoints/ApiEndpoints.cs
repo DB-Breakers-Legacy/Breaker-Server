@@ -25,7 +25,13 @@ public static class ApiEndpoints
 
     private static void MapGame(IEndpointRouteBuilder app)
     {
-        var api = app.MapGroup("/dbtb-prd/{title}/api");
+        MapGame(app, "/dbtb-prd/{title}/api");
+        MapGame(app, "/dbtb-prd/{prefix}/{title}/api");
+    }
+
+    private static void MapGame(IEndpointRouteBuilder app, string prefix)
+    {
+        var api = app.MapGroup(prefix);
         void Static(string path, string name) =>
             api.MapPost(path, (ApiResponseService responses, ResponseCatalog catalog) =>
                 responses.Respond(catalog.Get(name)));
@@ -74,8 +80,37 @@ public static class ApiEndpoints
         Static("/battle/pre_matching_connection", "preMatchingConnection");
         Static("/battle/save_matching_cache", "saveMatchingCache");
         Static("/player/upload_ghost_player", "uploadGhostPlayer");
-        Static("/battle/consume_priority_point", "consumePriorityPoint");
-        Static("/battle/get_battle_member_result_list", "getBattleMemberResultList");
+
+        api.MapPost("/battle/consume_priority_point", async (
+            HttpRequest request,
+            ApiResponseService responses,
+            ResponseCatalog catalog,
+            MatchmakingCoordinator coordinator,
+            RequestIdentityResolver identity,
+            CancellationToken ct) =>
+        {
+            // Real-player battles must be known to the coordinator; practice and bot matches are not tracked.
+            var body = await MessagePackHttp.ReadAsync(request, ct);
+            var userId = identity.ResolveUserId(body).ToString();
+            if (coordinator.HasConnectionRoom(userId))
+                coordinator.RequireBattle(userId);
+            return responses.Respond(catalog.Get("consumePriorityPoint"));
+        });
+
+        api.MapPost("/battle/get_battle_member_result_list", async (
+            HttpRequest request,
+            ApiResponseService responses,
+            ResponseCatalog catalog,
+            MatchmakingCoordinator coordinator,
+            RequestIdentityResolver identity,
+            CancellationToken ct) =>
+        {
+            var body = await MessagePackHttp.ReadAsync(request, ct);
+            var userId = identity.ResolveUserId(body).ToString();
+            if (coordinator.HasConnectionRoom(userId))
+                coordinator.RequireBattle(userId);
+            return responses.Respond(catalog.Get("getBattleMemberResultList"));
+        });
 
         api.MapPost("/user/create_user_info", async (
             HttpRequest request,
@@ -125,9 +160,23 @@ public static class ApiEndpoints
         // (sub_140816D90) keeps entries whose first string is all digits (the stage number, atoi) with the
         // second string (Possible_ display name or period). Non-numeric entries are skipped and an empty list
         // is accepted (the player then sends desiredStageId "unselected"). Missing, the 404 made practice
-        // show "failed to connect" (live test 2026-11-10). Empty until we know the real stage numbers.
+        // show "failed to connect" (live test 2026-11-10). Stage numbers and names from the captured official
+        // reply (matchmaking restoration, PR #6).
         api.MapPost("/season/get_selectable_stage", (ApiResponseService responses) =>
-            responses.Respond(new object?[] { 0, Array.Empty<object?>() }));
+            responses.Respond(new object?[]
+            {
+                0,
+                new object?[]
+                {
+                    new object?[] { "1000", "ハイランドリバー" },
+                    new object?[] { "1100", "スノーマウンテン" },
+                    new object?[] { "1110", "ロックフィールド" },
+                    new object?[] { "1200", "ウォーターフロント" },
+                    new object?[] { "1300", "グリーンコースト" },
+                    new object?[] { "1400", "デンジャーグラウンド" },
+                    new object?[] { "1500", "ダークフューチャー" }
+                }
+            }));
 
         api.MapPost("/battle/get_stun_server_info", (
             ApiResponseService responses,
@@ -405,19 +454,30 @@ public static class ApiEndpoints
             return responses.Respond(new object?[] { 0, result, 696969 });
         });
 
-        api.MapPost("/battle/get_connection_server_info", (
+        api.MapPost("/battle/get_connection_server_info", async (
+            HttpRequest request,
             ApiResponseService responses,
             SessionKeyRegistry registry,
-            IOptions<BreakerOptions> options) =>
+            MatchmakingCoordinator coordinator,
+            RequestIdentityResolver identity,
+            IOptions<BreakerOptions> options,
+            CancellationToken ct) =>
         {
+            // Real-player battles connect through the coordinator's connection room; practice and bot
+            // matches use the session listener directly.
+            var body = await MessagePackHttp.ReadAsync(request, ct);
+            var userId = identity.ResolveUserId(body).ToString();
+            var binding = coordinator.HasConnectionRoom(userId)
+                ? coordinator.GetConnectionBinding(userId)
+                : new ConnectionBinding(options.Value.UdpHost, options.Value.UdpSessionPort, string.Empty);
             var keys = registry.Create();
             return responses.Respond(new object?[]
             {
                 0,
                 new object?[]
                 {
-                    options.Value.UdpHost,
-                    options.Value.UdpSessionPort,
+                    binding.Host,
+                    binding.Port,
                     keys.Sid,
                     keys.Aes,
                     keys.Iv,
@@ -429,13 +489,18 @@ public static class ApiEndpoints
         api.MapPost("/battle/start", async (
             HttpRequest request,
             ApiResponseService responses,
+            MatchmakingCoordinator coordinator,
+            RequestIdentityResolver identity,
             CancellationToken ct) =>
         {
             var body = ObjectTree.List(await MessagePackHttp.ReadAsync(request, ct), 2);
+            var userId = identity.ResolveUserId(body).ToString();
             var args = ObjectTree.List(body[1], 2);
             var roster = ObjectTree.List(args[1], 1);
             var leader = ObjectTree.Text(roster[0]);
-            var battleId = $"{leader}_{DateTimeOffset.Now:yyyyMMddHHmmss}";
+            var battleId = coordinator.HasConnectionRoom(userId)
+                ? coordinator.StartBattle(userId, leader)
+                : $"{leader}_{DateTimeOffset.Now:yyyyMMddHHmmss}";
 
             return responses.Respond(new object?[]
             {
@@ -583,18 +648,33 @@ public static class ApiEndpoints
         // entry without checking it was found: with an empty list the game crashed (live 2026-11-11, 0x14043B0E2,
         // null read; Raider = Cell, id 100). The request carries that id as argument 2 (live: [battleId, 1, 100,
         // 2, ...]), so one entry for it is returned, rank row 0 and no gains.
-        api.MapPost("/battle/result", async (HttpRequest request, ApiResponseService responses, CancellationToken ct) =>
+        api.MapPost("/battle/result", async (
+            HttpRequest request,
+            ApiResponseService responses,
+            MatchmakingCoordinator coordinator,
+            RequestIdentityResolver identity,
+            CancellationToken ct) =>
         {
             var raiderEntries = new List<object?>();
+            object? raw = null;
             try
             {
-                var body = ObjectTree.List(await MessagePackHttp.ReadAsync(request, ct), 2);
+                raw = await MessagePackHttp.ReadAsync(request, ct);
+                var body = ObjectTree.List(raw, 2);
                 var args = ObjectTree.List(body[1], 3);
                 raiderEntries.Add(new object?[] { ObjectTree.Int32(args[2]), 0, 0, 0 });
             }
             catch (Exception)
             {
                 // Unreadable request: keep the list empty (survivor results never read it).
+            }
+
+            // A real-player battle ends in the coordinator, which frees the players for the next queue.
+            if (raw is not null)
+            {
+                var userId = identity.ResolveUserId(raw).ToString();
+                if (coordinator.HasActiveBattle(userId))
+                    coordinator.CompleteBattle(userId);
             }
 
             object?[] pass =
