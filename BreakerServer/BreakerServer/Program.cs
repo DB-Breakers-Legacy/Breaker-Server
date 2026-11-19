@@ -14,7 +14,13 @@ builder.WebHost.ConfigureKestrel(options =>
 
 builder.Services.AddOptions<BreakerOptions>()
     .Bind(builder.Configuration.GetSection(BreakerOptions.SectionName))
-    .Validate(HasValidDiarkisKeys, "Breaker Diarkis keys must be configured as hexadecimal strings with valid lengths.")
+    .PostConfigure(options =>
+        options.StunPorts = options.StunPorts.Length == 0 ? [3478, 3479] : options.StunPorts.Distinct().ToArray())
+    .Validate(HasValidDiarkisKeys, "Breaker Diarkis keys are optional, but if any is set all four must be hexadecimal strings with valid lengths.")
+    .Validate(options => System.Net.IPAddress.TryParse(options.BindAddress, out _),
+        "Breaker:BindAddress must be an IP address (127.0.0.1, this PC's Tailscale IP, or 0.0.0.0 for every interface).")
+    .Validate(options => options.CasualMatchmaking.ToLowerInvariant() is "bots" or "players",
+        "Breaker:CasualMatchmaking must be \"bots\" or \"players\".")
     .ValidateOnStart();
 builder.Services.AddDbContext<BreakerDbContext>(options =>
     options.UseSqlite(builder.Configuration.GetConnectionString("Breaker") ?? "Data Source=breaker.db"));
@@ -25,12 +31,16 @@ builder.Services.AddSingleton<SessionKeyRegistry>();
 builder.Services.AddSingleton<MatchmakingCoordinator>();
 builder.Services.AddSingleton<ConnectionRoomCoordinator>();
 builder.Services.AddSingleton<AuthSessionRegistry>();
-builder.Services.AddHostedService(services => new DiarkisUdpService(
+builder.Services.AddSingleton<AccountTokenService>();
+// Two listeners of the same class: AddHostedService would keep only the first registration
+// (it de-duplicates by implementation type), so the session listener on UdpSessionPort never started.
+builder.Services.AddSingleton<IHostedService>(services => new DiarkisUdpService(
     services.GetRequiredService<IOptions<BreakerOptions>>(),
     services.GetRequiredService<ILogger<DiarkisUdpService>>(),
+    sessionListener: false,
     sessionKeys: services.GetRequiredService<SessionKeyRegistry>(),
     coordinator: services.GetRequiredService<MatchmakingCoordinator>()));
-builder.Services.AddHostedService(services => new DiarkisUdpService(
+builder.Services.AddSingleton<IHostedService>(services => new DiarkisUdpService(
     services.GetRequiredService<IOptions<BreakerOptions>>(),
     services.GetRequiredService<ILogger<DiarkisUdpService>>(),
     sessionListener: true,
@@ -39,6 +49,7 @@ builder.Services.AddHostedService(services => new DiarkisUdpService(
 builder.Services.AddHostedService<StunUdpService>();
 builder.Services.AddScoped<ApiResponseService>();
 builder.Services.AddScoped<AccountService>();
+builder.Services.AddScoped<OfficialSaveImporter>();
 builder.Services.AddScoped<UserAuthService>();
 builder.Services.AddScoped<RequestIdentityResolver>();
 
@@ -48,7 +59,11 @@ app.UseMiddleware<RequestTraceMiddleware>();
 app.UseMiddleware<CdnHeadersMiddleware>();
 
 using (var scope = app.Services.CreateScope())
-    scope.ServiceProvider.GetRequiredService<BreakerDbContext>().Database.EnsureCreated();
+{
+    var db = scope.ServiceProvider.GetRequiredService<BreakerDbContext>();
+    db.Database.EnsureCreated();
+    DatabaseUpgrade.Run(db);
+}
 
 app.MapGet("/health", () => Results.Ok(new
 {
@@ -69,6 +84,8 @@ app.Run();
 
 static bool HasValidDiarkisKeys(BreakerOptions options)
 {
+    if (!options.HasAnyDiarkisKey)
+        return true;  // fresh keys per session
     try
     {
         BreakerServer.Protocol.Diarkis.SecureEnvelope.FromHex(

@@ -25,8 +25,8 @@ public sealed class StunUdpService(
 
     private async Task RunPortAsync(int port, CancellationToken ct)
     {
-        using var udp = new UdpClient(new IPEndPoint(IPAddress.Any, port));
-        logger.LogInformation("STUN emulator listening on UDP {Port}", port);
+        using var udp = new UdpClient(new IPEndPoint(_options.BindIPAddress, port));
+        logger.LogInformation("STUN emulator listening on UDP {Address}:{Port}", _options.BindIPAddress, port);
 
         while (!ct.IsCancellationRequested)
         {
@@ -51,6 +51,13 @@ public sealed class StunUdpService(
                 continue;
             }
 
+            logger.LogDebug(
+                "STUN binding port={Port} from={Remote} bytes={Length} request={Request} -> mapped {Remote}",
+                port,
+                received.RemoteEndPoint,
+                received.Buffer.Length,
+                Convert.ToHexString(received.Buffer.AsSpan(0, Math.Min(received.Buffer.Length, 64))),
+                received.RemoteEndPoint);
             await udp.SendAsync(response, received.RemoteEndPoint, ct);
         }
     }

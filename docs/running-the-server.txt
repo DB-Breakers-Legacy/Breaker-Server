@@ -1,0 +1,113 @@
+HOW TO START THE BREAKER SERVER
+================================
+
+This runs our own DRAGON BALL: THE BREAKERS server on this PC, so the game can log in, reach the
+lobby and play practice matches against the Raider bot without the official servers.
+
+Local/private play only. Never point this at official infrastructure, Steam or real player accounts.
+
+
+1. ONE-TIME SETUP (already done on this PC)
+-------------------------------------------
+- .NET SDK 10 is installed (check: open PowerShell and type   dotnet --version  ).
+- The custom steam_api64.dll is in the game's bin folder:
+      D:\SteamLibrary\steamapps\common\DRAGON BALL THE BREAKERS\bin\steam_api64.dll
+  Your original DLLs are backed up beside it as steam_api64.dll.*.bak
+  (steam_api64.dll.steam-original.bak = the real Steam one).
+- The DLL's settings file sends the game to this server:
+      D:\SteamLibrary\steamapps\common\DRAGON BALL THE BREAKERS\bin\BreakersRevived\steam_config.ini
+      backend_host=127.0.0.1
+      backend_port=5000
+      block_official=1        (the game can't reach the official servers)
+- The battle data file exists at:
+      D:\archive\breakers custom server\ProjectTemporal\adjustmentdata.txt
+  Without it, matchmaking fails with "game data contains old data".
+
+
+2. START THE SERVER
+-------------------
+1. Open PowerShell (Start menu -> type PowerShell -> open it).
+2. Paste this line and press Enter:
+
+      powershell -ExecutionPolicy Bypass -File "D:\dragon ball the breakers legacy\breakers server\start-breaker-server.ps1"
+
+3. Wait until you see these lines (the first start can take a minute while it builds):
+
+      Diarkis matching UDP service listening on port 7100
+      Diarkis session UDP service listening on port 7099
+      Now listening on: http://127.0.0.1:5000
+      Application started. Press Ctrl+C to shut down.
+
+4. Leave that window open. The server runs only while it stays open.
+
+
+3. PLAY
+-------
+1. Start the game from Steam as usual.
+2. It logs in to our server and goes to the lobby.
+3. Practice: pick practice with the Raider bot, then press start.
+
+
+4. STOP THE SERVER
+------------------
+Click the PowerShell window and press Ctrl+C. Or just close the window.
+
+Close or back out of the game first. If the server stops while the game is in a lobby or match, the
+game shows a connection error (for example 3300000104 or 330000204). That is expected: restart the
+server, then go back into practice.
+
+
+5. WHERE THINGS GO
+------------------
+Server code:       D:\dragon ball the breakers legacy\breakers server\Breaker-Server-main   (branch fix/diarkis-udp-transport)
+Server logs:       D:\dragon ball the breakers legacy\breakers server\logs                   (when started by Claude; see note below)
+Request captures:  D:\dragon ball the breakers legacy\breakers server\captures\<date-time>   (every request the game sent, one folder per run)
+News board image:  D:\dragon ball the breakers legacy\breakers server\news-experiment
+Game-side log:     ...\DRAGON BALL THE BREAKERS\bin\BreakersRevived\Logs\BreakersRevived.log
+                   (most lines are only written when the game closes)
+
+Note: started by hand as in step 2, the server prints its log in the PowerShell window only. To also
+save it to a file, use this line instead:
+
+      powershell -ExecutionPolicy Bypass -File "D:\dragon ball the breakers legacy\breakers server\start-breaker-server.ps1" 2>&1 | Tee-Object -FilePath "D:\dragon ball the breakers legacy\breakers server\logs\server-$(Get-Date -Format 'yyyyMMdd-HHmmss').log"
+
+
+6. DO NOT DELETE
+----------------
+D:\dragon ball the breakers legacy\breakers server\Breaker-Server-main\BreakerServer\BreakerServer\account-token-secret.key
+
+It keeps each account's userId the same at every login. Deleted, every account gets a new userId and
+the game throws away the local save (character creation and the tutorial start over).
+
+
+7. TURNING THINGS OFF (optional, in start-breaker-server.ps1)
+-------------------------------------------------------------
+Open the .ps1 file in Notepad and delete the line(s) for what you want off:
+- Detailed STUN logging:  the line with  StunUdpService} = "Debug"
+- Custom news image:      the two lines with  Breaker__NewsImageUrl  and  Breaker__NewsImageFile
+- Request capture:        the line with  BREAKER_CAPTURE_DIR
+Do NOT remove the Breaker__AdjustmentDataPath line (matchmaking needs it).
+
+
+8. TROUBLESHOOTING
+------------------
+"Address already in use" / port 5000, 7099 or 7100 busy
+    Another copy of the server is already running. Close the other PowerShell window, or run:
+        Get-Process BreakerServer | Stop-Process
+    then start again.
+
+The game can't log in or goes to the official servers
+    Check that steam_api64.dll in the game's bin folder is the custom one (not the .bak files) and
+    that bin\BreakersRevived\steam_config.ini (in the game folder) still has backend_host=127.0.0.1 and backend_port=5000.
+
+"Game data contains old data" when starting matchmaking
+    The battle data file path in start-breaker-server.ps1 (Breaker__AdjustmentDataPath) is wrong or
+    the file is missing.
+
+Error during matchmaking
+    Note the number, close the game, and send the newest file from D:\dragon ball the breakers legacy\breakers server\logs (and the
+    game-side BreakersRevived.log) to whoever is working on the server.
+
+Going back to the real Steam DLL (to play normally)
+    Close the game, then in the bin folder rename steam_api64.dll to steam_api64.dll.breakers.bak and
+    copy steam_api64.dll.steam-original.bak to steam_api64.dll. Reverse it to come back.

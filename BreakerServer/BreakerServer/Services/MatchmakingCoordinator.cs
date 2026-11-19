@@ -94,6 +94,20 @@ public sealed class MatchmakingCoordinator(IOptions<BreakerOptions> options)
             return _players.TryGetValue(userId, out var player) && player.Group is null;
     }
 
+    /// <summary>True when this coordinator assembled the user's battle (real-player matchmaking).
+    /// Practice and bot matches are not tracked here.</summary>
+    public bool HasConnectionRoom(string userId)
+    {
+        lock (_sync)
+            return _players.TryGetValue(userId, out var player) && player.Group is not null;
+    }
+
+    public bool HasActiveBattle(string userId)
+    {
+        lock (_sync)
+            return _activeBattles.ContainsKey(userId);
+    }
+
     public ConnectionBinding GetConnectionBinding(string userId)
     {
         lock (_sync)

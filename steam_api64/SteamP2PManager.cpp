@@ -119,6 +119,12 @@ namespace SteamP2PManager
 
         std::lock_guard<std::mutex> lock(g_Mutex);
 
+        // Bounded: packets arrive from unauthenticated UDP. If the game stops reading (or a peer floods),
+        // drop the oldest instead of growing without limit.
+        constexpr size_t kMaxQueuedPackets = 4096;
+        if (g_Incoming.size() >= kMaxQueuedPackets)
+            g_Incoming.erase(g_Incoming.begin());
+
         BreakersP2PPacket packet{};
         packet.Sender = sender;
         packet.Target = SteamIDManager::GetLocalSteamID();

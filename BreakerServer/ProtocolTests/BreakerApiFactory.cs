@@ -12,20 +12,16 @@ using Microsoft.Extensions.Logging;
 
 namespace BreakerServer.ProtocolTests;
 
-public sealed class BreakerApiFactory : WebApplicationFactory<Program>
+public class BreakerApiFactory : WebApplicationFactory<Program>
 {
     private SqliteConnection? _connection;
 
     protected override void ConfigureWebHost(IWebHostBuilder builder)
     {
         builder.ConfigureAppConfiguration((_, configuration) =>
-            configuration.AddInMemoryCollection(new Dictionary<string, string?>
-            {
-                ["Breaker:DiarkisIvKey"] = string.Concat(Enumerable.Repeat("01", 16)),
-                ["Breaker:DiarkisAesKey"] = string.Concat(Enumerable.Repeat("02", 16)),
-                ["Breaker:DiarkisSidKey"] = string.Concat(Enumerable.Repeat("03", 16)),
-                ["Breaker:DiarkisHashKey"] = string.Concat(Enumerable.Repeat("04", 16))
-            }));
+            // No Diarkis keys configured: fresh keys per session, as in production. Tests of the fixed-key
+            // development override add them through ExtraSettings.
+            configuration.AddInMemoryCollection(ExtraSettings()));
 
         builder.ConfigureLogging(logging => logging.ClearProviders());
 
@@ -40,6 +36,9 @@ public sealed class BreakerApiFactory : WebApplicationFactory<Program>
             services.AddDbContext<BreakerDbContext>(options => options.UseSqlite(_connection));
         });
     }
+
+    // Settings a derived fixture adds (e.g. the official-save import folder).
+    protected virtual IEnumerable<KeyValuePair<string, string?>> ExtraSettings() => [];
 
     protected override void Dispose(bool disposing)
     {

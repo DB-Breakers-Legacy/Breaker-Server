@@ -87,6 +87,15 @@ public sealed class ConnectionRoomCoordinator(MatchmakingCoordinator matchmaking
             return FindMember(userId).P2PCompleted;
     }
 
+    /// <summary>True when the user is in a connection room built by real-player matchmaking.</summary>
+    public bool IsRoomMember(string? userId)
+    {
+        if (userId is null)
+            return false;
+        lock (_sync)
+            return _rooms.Values.Any(room => room.Members.Any(member => member.UserId == userId));
+    }
+
     public IReadOnlyList<OutgoingRoomCommand> HandleRoomCommand(
         string userId,
         CommandEnvelope envelope)

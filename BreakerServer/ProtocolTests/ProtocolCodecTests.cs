@@ -82,6 +82,64 @@ public sealed class ProtocolCodecTests
         Assert.Null(SecureEnvelope.Decrypt(encrypted, keys).Plaintext);
     }
 
+    [Theory]
+    [InlineData(1, 16)]
+    [InlineData(15, 16)]
+    [InlineData(16, 32)]   // already aligned: a full extra block, as the client does (0x140DFA190)
+    [InlineData(17, 32)]
+    [InlineData(0, 16)]
+    public void SecureEnvelopeUsesZeroPaddingWithAFullExtraBlockWhenAligned(int length, int ciphertextLength)
+    {
+        var keys = new DiarkisKeySet(new byte[16], Enumerable.Repeat((byte)7, 16).ToArray(), new byte[16], new byte[16]);
+        var data = Enumerable.Repeat((byte)0xAB, length).ToArray();
+        var blob = SecureEnvelope.Encrypt(data, keys);
+
+        Assert.Equal(SecureEnvelope.HeaderSize + ciphertextLength, blob.Length);
+        Assert.Equal((uint)length, System.Buffers.Binary.BinaryPrimitives.ReadUInt32BigEndian(blob));
+
+        using var aes = System.Security.Cryptography.Aes.Create();
+        aes.Key = keys.Key;
+        var clear = aes.DecryptCbc(blob.AsSpan(SecureEnvelope.HeaderSize), keys.Iv, System.Security.Cryptography.PaddingMode.None);
+        Assert.Equal(data, clear[..length]);
+        Assert.All(clear[length..], b => Assert.Equal(0, b));
+    }
+
+    [Fact]
+    public void SecureEnvelopeAcceptsAZeroPaddedClientBlob()
+    {
+        // Built the way the client builds it: zero padding, HMAC over the ciphertext.
+        var keys = new DiarkisKeySet(new byte[16], Enumerable.Repeat((byte)2, 16).ToArray(),
+            Enumerable.Repeat((byte)1, 16).ToArray(), Enumerable.Repeat((byte)4, 16).ToArray());
+        var data = new byte[] { 0, 0, 1, 0x2C, 0xA0, 1, 0, 0 };
+        var padded = new byte[16];
+        data.CopyTo(padded, 0);
+        using var aes = System.Security.Cryptography.Aes.Create();
+        aes.Key = keys.Key;
+        var ciphertext = aes.EncryptCbc(padded, keys.Iv, System.Security.Cryptography.PaddingMode.None);
+        var mac = System.Security.Cryptography.HMACSHA256.HashData(keys.Mac, ciphertext);
+        var blob = new byte[4 + 32 + ciphertext.Length];
+        System.Buffers.Binary.BinaryPrimitives.WriteUInt32BigEndian(blob, (uint)data.Length);
+        mac.CopyTo(blob, 4);
+        ciphertext.CopyTo(blob, 36);
+
+        var result = SecureEnvelope.Decrypt(blob, keys);
+        Assert.True(result.HmacOk);
+        Assert.Equal(data, result.Plaintext);
+    }
+
+    [Fact]
+    public void ServerCommandBodyIsExactlyTheSecureBlob()
+    {
+        var keys = new DiarkisKeySet(new byte[16], new byte[16], new byte[16], new byte[16]);
+        var packet = DiarkisPacketFactory.BuildCommand(5, (byte)DiarkisDatagramType.Reliable, 0x012F, 1, 0xFF, new byte[] { 1, 2, 3 }, keys);
+        var header = DatagramHeader.Parse(packet);
+        var envelope = CommandEnvelopeCodec.Parse(header.Payload, fromClient: false);
+
+        Assert.Equal((byte)DiarkisDatagramType.Reliable, header.PacketType);
+        Assert.Equal(SecureEnvelope.HeaderSize + 16, envelope.Body.Length);
+        Assert.Equal(new byte[] { 1, 2, 3 }, SecureEnvelope.Decrypt(envelope.Body, keys).Plaintext);
+    }
+
     [Fact]
     public void ZeroLengthFieldAcceptsHmacValidatedContent()
     {

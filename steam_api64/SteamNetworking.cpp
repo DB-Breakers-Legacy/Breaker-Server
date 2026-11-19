@@ -138,13 +138,19 @@ private:
 
         sockaddr_in local{};
         local.sin_family = AF_INET;
-        local.sin_addr.s_addr = htonl(INADDR_ANY);
+        local.sin_addr.s_addr = htonl(SteamConfig::BindIPv4());   // bind_address, default 127.0.0.1
         local.sin_port = htons(0);
 
-        bind(
+        if (bind(
             socketHandle,
             reinterpret_cast<sockaddr*>(&local),
-            sizeof(local));
+            sizeof(local)) == SOCKET_ERROR)
+        {
+            Logger::Error("BreakersSteamNetworking: bind to bind_address failed; P2P socket disabled");
+            closesocket(socketHandle);
+            socketHandle = INVALID_SOCKET;
+            return false;
+        }
 
         std::string host;
         uint16_t port = 0;
@@ -171,7 +177,7 @@ private:
         }
 
         Logger::Info(
-            "BreakersSteamNetworking: custom LAN/Radmin endpoint " +
+            "BreakersSteamNetworking: custom P2P endpoint " +
             host +
             ":" +
             std::to_string(port));
@@ -203,6 +209,9 @@ private:
                 break;
 
             if (received < 24)
+                continue;
+
+            if (from.sin_family != AF_INET || !SteamConfig::IsAllowedPeerIPv4(ntohl(from.sin_addr.s_addr)))
                 continue;
 
             if (memcmp(buffer, "BreakersP2P1", 7) != 0)
@@ -586,6 +595,7 @@ public:
     }
 };
 
+// Vtable-backed versions of the next three live in SteamNetworkingInterfaces.cpp.
 class BreakersSteamNetworkingMessages
 {
 public:
@@ -636,9 +646,6 @@ public:
 };
 
 static BreakersSteamNetworking g_Networking;
-static BreakersSteamNetworkingMessages g_Messages;
-static BreakersSteamNetworkingSockets g_Sockets;
-static BreakersSteamNetworkingUtils g_Utils;
 
 extern "C" void* __cdecl BreakersRevived_SteamNetworking()
 {
@@ -652,26 +659,14 @@ extern "C" void* __cdecl BreakersRevived_SteamGameServerNetworking()
     return &g_Networking;
 }
 
-extern "C" void* __cdecl BreakersRevived_SteamNetworkingMessages()
+
+// Logging bridge for SteamNetworkingInterfaces.cpp, which cannot include StdInc.h (SDK type clash).
+void BreakersNetLog(const char* message)
 {
-    SteamVersionLogger::LogInterfaceRequest("BreakersRevived_SteamNetworkingMessages", "SteamNetworkingMessages002");
-    return &g_Messages;
+    Logger::Info(message ? message : "");
 }
 
-extern "C" void* __cdecl BreakersRevived_SteamNetworkingSockets()
+void BreakersNetLogInterface(const char* accessor, const char* version)
 {
-    SteamVersionLogger::LogInterfaceRequest("BreakersRevived_SteamNetworkingSockets", "SteamNetworkingSockets012");
-    return &g_Sockets;
-}
-
-extern "C" void* __cdecl BreakersRevived_SteamGameServerNetworkingSockets()
-{
-    SteamVersionLogger::LogInterfaceRequest("BreakersRevived_SteamGameServerNetworkingSockets", "SteamNetworkingSockets012");
-    return &g_Sockets;
-}
-
-extern "C" void* __cdecl BreakersRevived_SteamNetworkingUtils()
-{
-    SteamVersionLogger::LogInterfaceRequest("BreakersRevived_SteamNetworkingUtils", "SteamNetworkingUtils004");
-    return &g_Utils;
+    SteamVersionLogger::LogInterfaceRequest(accessor ? accessor : "", version ? version : "");
 }

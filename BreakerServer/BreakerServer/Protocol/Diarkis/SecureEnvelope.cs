@@ -46,6 +46,9 @@ public static class SecureEnvelope
     {
         Validate(keys);
 
+        // Zero padding up to the next 16 bytes, with a full extra block when the data is already
+        // aligned (the client sizes the buffer this way in 0x140DFA190; its AES engine at 0x140E0F040
+        // runs raw CBC and writes no padding bytes of its own). The length field carries the real size.
         var padding = BlockSize - (plaintext.Length & (BlockSize - 1));
         var padded = new byte[plaintext.Length + padding];
         plaintext.CopyTo(padded);

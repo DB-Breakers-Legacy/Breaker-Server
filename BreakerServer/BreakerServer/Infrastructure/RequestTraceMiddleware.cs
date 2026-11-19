@@ -8,6 +8,12 @@ public sealed class RequestTraceMiddleware(
     ILogger<RequestTraceMiddleware> logger)
 {
     private const int PreviewLimit = 256;
+    private const int CaptureLimit = 16 * 1024 * 1024;
+
+    // Opt-in research aid: when BREAKER_CAPTURE_DIR is set, every request body is also saved whole to
+    // <dir>/<time>_<path>.bin, so client payloads (avatar data, tutorial steps...) can be studied offline.
+    private static readonly string? CaptureDirectory = Environment.GetEnvironmentVariable("BREAKER_CAPTURE_DIR");
+    private static int _captureCounter;
 
     public async Task InvokeAsync(HttpContext context)
     {
@@ -28,6 +34,21 @@ public sealed class RequestTraceMiddleware(
                 FormatPreview(body));
         }
 
+        // With capture on, the reply is saved too (2026-11-13: "log everything from the beginning"): the response
+        // body goes to a buffer, is copied on to the game unchanged, and is written next to the request as
+        // <time>_<number>_<path>.reply.bin (same number as the request file).
+        var captureId = 0;
+        Stream? originalBody = null;
+        MemoryStream? replyBuffer = null;
+        if (!string.IsNullOrWhiteSpace(CaptureDirectory))
+        {
+            captureId = Interlocked.Increment(ref _captureCounter);
+            await CaptureAsync(context.Request, captureId, context.RequestAborted);
+            originalBody = context.Response.Body;
+            replyBuffer = new MemoryStream();
+            context.Response.Body = replyBuffer;
+        }
+
         var stopwatch = Stopwatch.StartNew();
         try
         {
@@ -35,6 +56,15 @@ public sealed class RequestTraceMiddleware(
         }
         finally
         {
+            if (replyBuffer is not null && originalBody is not null)
+            {
+                context.Response.Body = originalBody;
+                replyBuffer.Position = 0;
+                await replyBuffer.CopyToAsync(originalBody, context.RequestAborted);
+                await SaveReplyAsync(context.Request, captureId, replyBuffer);
+                await replyBuffer.DisposeAsync();
+            }
+
             stopwatch.Stop();
             var path = context.Request.Path.Value ?? string.Empty;
 
@@ -56,6 +86,48 @@ public sealed class RequestTraceMiddleware(
                     context.Response.StatusCode,
                     stopwatch.ElapsedMilliseconds);
             }
+        }
+    }
+
+    private async Task SaveReplyAsync(HttpRequest request, int captureId, MemoryStream reply)
+    {
+        try
+        {
+            if (reply.Length == 0 || reply.Length > CaptureLimit)
+                return;
+            Directory.CreateDirectory(CaptureDirectory!);
+            var name = (request.Path.Value ?? "root").Trim('/').Replace('/', '_');
+            var file = Path.Combine(CaptureDirectory!, $"{DateTime.Now:HHmmss}_{captureId:D4}_{name}.reply.bin");
+            await File.WriteAllBytesAsync(file, reply.ToArray());
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            logger.LogWarning(ex, "Reply capture failed");
+        }
+    }
+
+    private async Task CaptureAsync(HttpRequest request, int captureId, CancellationToken ct)
+    {
+        try
+        {
+            if (request.ContentLength is not > 0)
+                return;
+            request.Body.Position = 0;
+            using var buffer = new MemoryStream();
+            await request.Body.CopyToAsync(buffer, ct);
+            request.Body.Position = 0;
+            if (buffer.Length > CaptureLimit)
+                return;
+
+            Directory.CreateDirectory(CaptureDirectory!);
+            var name = (request.Path.Value ?? "root").Trim('/').Replace('/', '_');
+            var file = Path.Combine(CaptureDirectory!,
+                $"{DateTime.Now:HHmmss}_{captureId:D4}_{name}.bin");
+            await File.WriteAllBytesAsync(file, buffer.ToArray(), ct);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            logger.LogWarning(ex, "Request capture failed");
         }
     }
 

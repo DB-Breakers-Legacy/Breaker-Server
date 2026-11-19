@@ -504,13 +504,30 @@ public:
         return SteamLobbyManager::GetData(lobbyID, safeKey);
     }
 
+    // Real Steam posts LobbyDataUpdate_t (505) to every member, the local user included, after the lobby
+    // owner changes lobby data (member == lobby) or a member changes its own member data (member == user).
+    // The game waits for it: CSessionSteam's 505 handler (exe sub_140758550) checks success, and when
+    // member == lobby == its own lobby it marks the room ready (+0x158 = 1). Without this push, practice
+    // room creation stopped after the SetLobbyData calls (live test 2026-11-10).
+    static void PushLobbyDataUpdate(CSteamID lobbyID, CSteamID memberID)
+    {
+        LobbyDataUpdateResult result{};
+        result.m_ulSteamIDLobby = lobbyID;
+        result.m_ulSteamIDMember = memberID;
+        result.m_bSuccess = 1;
+        SteamCallbackManager::PushCallback(kCallbackLobbyDataUpdate, &result, sizeof(result));
+    }
+
     virtual bool SetLobbyData(CSteamID lobbyID, const char* key, const char* value)
     {
         const std::string safeKey = SafeCString(key);
         const std::string safeValue = SafeCString(value, 4096);
         TraceMatchmaking("SetLobbyData", LobbyDetail(lobbyID) + " key=" + DisplayCString(key));
         Logger::Info("SteamMatchmaking::SetLobbyData " + (safeKey.empty() ? "<empty>" : safeKey));
-        return SteamLobbyManager::SetData(lobbyID, safeKey, safeValue);
+        const bool stored = SteamLobbyManager::SetData(lobbyID, safeKey, safeValue);
+        if (stored)
+            PushLobbyDataUpdate(lobbyID, lobbyID);
+        return stored;
     }
 
     virtual int GetLobbyDataCount(CSteamID lobbyID)
@@ -553,7 +570,10 @@ public:
         const std::string safeKey = SafeCString(key);
         TraceMatchmaking("DeleteLobbyData", LobbyDetail(lobbyID) + " key=" + DisplayCString(key));
         Logger::Info("SteamMatchmaking::DeleteLobbyData");
-        return SteamLobbyManager::DeleteData(lobbyID, safeKey);
+        const bool removed = SteamLobbyManager::DeleteData(lobbyID, safeKey);
+        if (removed)
+            PushLobbyDataUpdate(lobbyID, lobbyID);
+        return removed;
     }
 
     virtual const char* GetLobbyMemberData(
@@ -586,6 +606,7 @@ public:
             SteamIDManager::GetLocalSteamID(),
             safeKey,
             safeValue);
+        PushLobbyDataUpdate(lobbyID, SteamIDManager::GetLocalSteamID());
     }
 
     virtual bool SendLobbyChatMsg(
